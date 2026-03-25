@@ -41,3 +41,5 @@ lightning_logs/
 # OS
 .DS_Store
 .env
+
+datasets/

@@ -5,6 +5,7 @@ import json
 import os
 import random
 import uuid
+from contextlib import nullcontext
 from datetime import datetime as dt
 from time import time
 from typing import Any, Dict
@@ -86,8 +87,8 @@ def main_worker(config: Dict[str, Any], args: argparse.Namespace):
     valid_sampler = SequentialSampler(valid_dataset)
 
     # Dataset loader
-    val_batch_size = 2 * config["training"]["batch_size"]
-    num_workers = 8
+    val_batch_size = 2 * config["training"]["batch_size"]       # also changed batch size to 2 from 8 in kitti_r101 config file
+    num_workers = 4     # from 8
     train_loader = DataLoader(
         train_dataset,
         batch_size=config["training"]["batch_size"],
@@ -162,7 +163,8 @@ def main_worker(config: Dict[str, Any], args: argparse.Namespace):
     while True:
         for batch in train_loader:
             if (step + 1) % nsteps_accumulation_gradient:
-                with context as fp, model.no_sync() as no_sync:
+                sync_context = model.no_sync() if args.distributed else nullcontext()
+                with context as fp, sync_context:
                     batch = {k: v.to(model.device) for k, v in batch.items()}
                     preds, losses, _ = model(**batch)
                     loss = (

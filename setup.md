@@ -72,12 +72,13 @@ Now the module should be fresh and clean ;).
 ```bash
 
 export CHECKPOINTS_PATH="/work/courses/3dv/team17/models"
+export BASE_PATH="/work/courses/3dv/team17/idisc"
 
 cd $IDISC_REPO_PATH
 
 python scripts/test.py --model-file $CHECKPOINTS_PATH/nyu_resnet101.pt \
   --config-file configs/nyu/nyu_r101.json \
-  --base-path $IDISC_REPO_PATH
+  --base-path $BASE_PATH
 ```
 
 ### Notes

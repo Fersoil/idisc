@@ -20,7 +20,7 @@
         "crop": "eigen",
         "train_dataset": "NYUDataset",
         "val_dataset": "NYUDataset",
-        "data_root": "datasets/nyu",
+        "data_root": "/work/courses/3dv/team17/idisc/datasets/nyu",
         "augmentations": {
             "horizontal_flip": 0.5,
             "random_rotation": 5,

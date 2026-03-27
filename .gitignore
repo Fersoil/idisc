@@ -43,3 +43,4 @@ lightning_logs/
 .env
 
 datasets/
+logs/

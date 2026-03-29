@@ -493,7 +493,7 @@ class Sam3Image(torch.nn.Module):
 
         if self.training or self.num_interactive_steps_val > 0:
             self._compute_matching(out, self.back_convert(find_target))
-        return out
+        return out, hs
 
     def _postprocess_out(self, out: Dict, multimask_output: bool = False):
         # For multimask output, during eval we return the single best mask with the dict keys expected by the evaluators, but also return the multimasks output with new keys.
@@ -589,7 +589,7 @@ class Sam3Image(torch.nn.Module):
                     find_target=find_target,
                     previous_out=stage_outs[-1],
                 )
-            out = self.forward_grounding(
+            out, hs = self.forward_grounding(
                 backbone_out=backbone_out,
                 find_input=find_input,
                 find_target=find_target,
@@ -832,7 +832,7 @@ class Sam3ImageOnVideoMultiGPU(Sam3Image):
         frame_idx_local_gpu = min(frame_idx_begin + self.rank, frame_idx_end - 1)
         # `forward_grounding` (from base class `Sam3ImageOnVideo`) runs the detector on a single frame
         with torch.profiler.record_function("forward_grounding"):
-            out_local = self.forward_grounding(
+            out_local, hs = self.forward_grounding(
                 backbone_out=backbone_out,
                 find_input=find_inputs[frame_idx_local_gpu],
                 find_target=None,
@@ -874,6 +874,7 @@ class Sam3ImageOnVideoMultiGPU(Sam3Image):
             "pred_boxes": out_local["pred_boxes"],
             "pred_boxes_xyxy": out_local["pred_boxes_xyxy"],
             "pred_masks": out_local["pred_masks"],
+            "hs": hs
         }
 
         # gather the results: after this step, each GPU will receive detector outputs on

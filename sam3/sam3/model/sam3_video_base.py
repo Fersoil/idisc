@@ -386,6 +386,7 @@ class Sam3VideoBase(nn.Module):
         orig_vid_width: int,
         is_image_only: bool = False,
         allow_new_detections: bool = True,
+        hidden_states_dict : Dict = {}
     ):
         """
         This function handles one-step inference for the DenseTracking model in an SPMD manner.
@@ -412,6 +413,7 @@ class Sam3VideoBase(nn.Module):
             geometric_prompt=geometric_prompt,
             feature_cache=feature_cache,
             allow_new_detections=allow_new_detections,
+            hidden_states_dict = hidden_states_dict
         )
 
         # Step 2: each GPU propagates its local SAM2 states to get the SAM2 prediction masks.
@@ -542,6 +544,7 @@ class Sam3VideoBase(nn.Module):
         feature_cache: Dict,
         reverse: bool,
         allow_new_detections: bool,
+        hidden_states_dict : Dict
     ):
         # Step 1: if text feature is not cached in `feature_cache`, compute and cache it
         text_batch_key = tuple(input_batch.find_text_batch)
@@ -586,6 +589,7 @@ class Sam3VideoBase(nn.Module):
             max_frame_num_to_track=max_frame_num_to_track,
             propagate_in_video_start_frame_idx=start_frame_idx,
         )
+        hidden_states_dict[frame_idx] = sam3_image_out["hs"]
         # note: detections in `sam3_image_out` has already gone through NMS
         pred_probs = sam3_image_out["pred_logits"].squeeze(-1).sigmoid()
         if not allow_new_detections:

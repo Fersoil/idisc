@@ -34,6 +34,7 @@ class Sam3BasePredictor:
         # Subclasses must populate these
         self.model = None
         self._all_inference_states: Dict[str, dict] = {}
+        self.hidden_states = {}
 
     # ── Request dispatch ──────────────────────────────────────────────
 
@@ -274,6 +275,7 @@ class Sam3BasePredictor:
                     **propagate_kwargs,
                     reverse=False,
                 ):
+                    self.hidden_states = self.model.hidden_states
                     yield {"frame_index": frame_idx, "outputs": outputs}
             # Backward propagation
             if propagation_direction in ["both", "backward"]:
@@ -281,9 +283,11 @@ class Sam3BasePredictor:
                     **propagate_kwargs,
                     reverse=True,
                 ):
+                    self.hidden_states = self.model.hidden_states
                     yield {"frame_index": frame_idx, "outputs": outputs}
         finally:
             logger.info(f"propagation ended in session {session_id}")
+            self.hidden_states = self.model.hidden_states
 
     def reset_session(self, session_id):
         """Reset the session to its initial state."""

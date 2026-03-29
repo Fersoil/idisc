@@ -86,6 +86,8 @@ class Sam3VideoInference(Sam3VideoBase):
         inference_state["cached_frame_outputs"] = {}
         inference_state["action_history"] = []  # for logging user actions
         inference_state["is_image_only"] = is_image_type(resource_path)
+        
+        self.hidden_states = {}
         return inference_state
 
     @torch.inference_mode()
@@ -392,6 +394,7 @@ class Sam3VideoInference(Sam3VideoBase):
             orig_vid_width=inference_state["orig_width"],
             is_image_only=inference_state["is_image_only"],
             allow_new_detections=has_text_prompt or has_geometric_prompt,
+            hidden_states_dict = self.hidden_states
         )
         # update inference state
         inference_state["tracker_inference_states"] = tracker_states_local_new

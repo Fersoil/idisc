@@ -50,6 +50,7 @@ class IDisc(nn.Module):
     def forward(
         self,
         image: torch.Tensor,
+        hs = None,
         gt: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ):
@@ -64,8 +65,12 @@ class IDisc(nn.Module):
 
         decoder_outputs = self.filter_decoder_relevant_resolutions(decoder_outputs)
         fpn_outputs = self.filter_decoder_relevant_resolutions(fpn_outputs)
+        # print("BOKMS", hs.shape)
 
         idrs = self.afp(decoder_outputs)
+        print(len(idrs))
+        # print("Les compare ts:", idrs.shape, hs.shape)
+        # idrs = hs
         outs = self.isd(fpn_outputs, idrs)
 
         out_lst = []

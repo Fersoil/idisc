@@ -66,11 +66,12 @@ class IDisc(nn.Module):
         decoder_outputs = self.filter_decoder_relevant_resolutions(decoder_outputs)
         fpn_outputs = self.filter_decoder_relevant_resolutions(fpn_outputs)
         # print("BOKMS", hs.shape)
-
-        idrs = self.afp(decoder_outputs)
-        print(len(idrs))
-        # print("Les compare ts:", idrs.shape, hs.shape)
-        # idrs = hs
+        if hs == None:
+            idrs = self.afp(decoder_outputs)
+        else:
+            x = torch.mean(hs, dim=0).unsqueeze(0)
+            x = torch.nn.functional.adaptive_avg_pool2d(x, (32, 128)).squeeze(1)
+            idrs = (x, x.clone(), x.clone())
         outs = self.isd(fpn_outputs, idrs)
 
         out_lst = []

@@ -87,9 +87,10 @@ for seq_name in sorted(os.listdir(root_dir)):
 
     if not os.path.isdir(seq_path):
         continue
-    # print("sequence:", seq_name, "path:", seq_path)
-    # hidden_states = get_hidden_states(seq_path)
-    # print(hidden_states[0].shape)
+    hidden_states = None
+    print("sequence:", seq_name, "path:", seq_path)
+    hidden_states = get_hidden_states(seq_path)
+    print(hidden_states[0].shape)
     dataset = KITTITrackingDataset(
         test_mode=True,
         base_path=seq_path,
@@ -99,5 +100,5 @@ for seq_name in sorted(os.listdir(root_dir)):
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
     for i, batch in enumerate(loader):
         print(f"Iteration {i}")
-        preds, losses, _ = model(batch["image"].to(device), None, None, None)
+        preds, losses, _ = model(batch["image"].to(device), hidden_states[i], None, None)
 

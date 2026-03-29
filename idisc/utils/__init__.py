@@ -8,7 +8,7 @@ from .layers import (Conv2d, LayerNorm, _get_activation_cls,
 from .metrics import DICT_METRICS_DEPTH, DICT_METRICS_NORMALS, RunningMetric
 from .misc import format_seconds, is_main_process
 from .validation import validate
-
+from .validation_with_sam import validate_with_sam
 __all__ = [
     "AttentionLayer",
     "PositionEmbeddingSine",
@@ -29,4 +29,5 @@ __all__ = [
     "RunningMetric",
     "DICT_METRICS_NORMALS",
     "DICT_METRICS_DEPTH",
+    "validate_with_sam"
 ]

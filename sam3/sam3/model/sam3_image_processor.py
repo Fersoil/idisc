@@ -181,13 +181,13 @@ class Sam3Processor:
 
     @torch.inference_mode()
     def _forward_grounding(self, state: Dict):
-        outputs = self.model.forward_grounding(
+        outputs, hs = self.model.forward_grounding(
             backbone_out=state["backbone_out"],
             find_input=self.find_stage,
             geometric_prompt=state["geometric_prompt"],
             find_target=None,
         )
-
+        
         out_bbox = outputs["pred_boxes"]
         out_logits = outputs["pred_logits"]
         out_masks = outputs["pred_masks"]
@@ -219,4 +219,5 @@ class Sam3Processor:
         state["masks"] = out_masks > 0.5
         state["boxes"] = boxes
         state["scores"] = out_probs
+        state["hidden_states"] = hs
         return state

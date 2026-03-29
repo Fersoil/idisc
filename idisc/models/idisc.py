@@ -69,7 +69,7 @@ class IDisc(nn.Module):
         if hs == None:
             idrs = self.afp(decoder_outputs)
         else:
-            x = torch.mean(hs, dim=0).unsqueeze(0)
+            x = torch.mean(hs, dim=1)
             x = torch.nn.functional.adaptive_avg_pool2d(x, (32, 128)).squeeze(1)
             idrs = (x, x.clone(), x.clone())
         outs = self.isd(fpn_outputs, idrs)

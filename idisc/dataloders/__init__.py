@@ -6,6 +6,7 @@ from .kitti import KITTIDataset
 from .nyu import NYUDataset
 from .nyu_normals import NYUNormalsDataset
 from .sunrgbd import SUNRGBDDataset
+from .cil import CILDataset
 
 __all__ = [
     "BaseDataset",
@@ -16,4 +17,5 @@ __all__ = [
     "DDADDataset",
     "DiodeDataset",
     "SUNRGBDDataset",
+    "CILDataset",
 ]

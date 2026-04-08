@@ -15,9 +15,11 @@ class CILDataset(BaseDataset):
     }
     min_depth = 0.01
     max_depth = 80.0        # adjust if your dataset is indoor (use 10.0)
-    test_split = "cil_val.txt"
-    train_split = "cil_train.txt"
+    train_split = "/home/tkwiecinski/idisc/splits/cil/cil_train.txt"
+    val_split  = "/home/tkwiecinski/idisc/splits/cil/cil_val.txt"
+    test_split = "/home/tkwiecinski/idisc/splits/cil/cil_test.txt"
 
+    
     def __init__(self, test_mode, base_path, depth_scale=1.0,
                  crop=None, benchmark=False, augmentations_db={},
                  masked=True, normalize=True, **kwargs):
@@ -33,7 +35,7 @@ class CILDataset(BaseDataset):
 
     def load_dataset(self):
         self.invalid_depth_num = 0
-        with open(os.path.join(self.base_path, self.split_file)) as f:
+        with open(os.path.join(self.split_file)) as f:
             for line in f:
                 parts = line.strip().split(" ")
                 img_info = {
@@ -45,7 +47,10 @@ class CILDataset(BaseDataset):
 
     def __getitem__(self, idx):
         image = np.asarray(Image.open(self.dataset[idx]["image_filename"]).convert("RGB"))
-        depth = np.load(self.dataset[idx]["annotation_filename_depth"]).astype(np.float32)
+        if not self.test_mode:
+            depth = np.load(self.dataset[idx]["annotation_filename_depth"]).astype(np.float32)
+        else:
+            depth = np.zeros((self.height, self.width), dtype=np.float32)
         depth = depth / self.depth_scale
         info = self.dataset[idx].copy()
         info["camera_intrinsics"] = self.CAM_INTRINSIC["ALL"].clone()

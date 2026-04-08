@@ -4,9 +4,9 @@
     },
     "training": {
         "n_iters": 40000,
-        "batch_size": 2,
+        "batch_size": 2,    
         "validation_interval": 200,
-        "nsteps_accumulation_gradient": 1,
+        "nsteps_accumulation_gradient": 2,
         "lr": 0.0002,
         "wd": 0.02,
         "div_factor": 1,
@@ -51,8 +51,6 @@
     },
     "model": {
         "num_heads": 1,
-        "use_normals": false,
-        "dummy": false,
         "attn_dec": true,
         "activation": "gelu",
         "expansion": 4,

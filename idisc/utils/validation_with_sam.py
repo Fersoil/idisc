@@ -13,6 +13,20 @@ from idisc.utils.misc import is_main_process
 
 from sam3.model.sam3_image_processor import Sam3Processor
 
+DEFAULT_SAM_PROMPT = "car . truck . person . bicycle . building . tree . road . sign . pole . barrier"
+
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
+
+def denormalize_imagenet(img_tensor):
+    """Reverse ImageNet normalization to uint8 [0, 255] for SAM3 input."""
+    mean = IMAGENET_MEAN.to(img_tensor.device)
+    std = IMAGENET_STD.to(img_tensor.device)
+    img = img_tensor * std + mean
+    return (img * 255).clamp(0, 255).byte()
+
+
 def log_losses(losses_all):
     for loss_name, loss_val in losses_all.items():
         print(f"Test/{loss_name}: ", loss_val)
@@ -64,6 +78,18 @@ def save_model(
                 print("Generic error while saving")
 
 
+def extract_instance_queries(processor, img_tensor, prompt=DEFAULT_SAM_PROMPT):
+    """Run SAM3 on a single image and return filtered instance queries."""
+    raw_img = denormalize_imagenet(img_tensor)
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        inference_state = processor.set_image(raw_img)
+        output = processor.set_text_prompt(state=inference_state, prompt=prompt)
+    instance_queries = output.get("instance_queries")
+    if instance_queries is not None:
+        instance_queries = instance_queries.float().clone()
+    return instance_queries
+
+
 def validate_with_sam(
     model_iDisc: nn.Module,
     model_SAM: nn.Module,
@@ -74,6 +100,7 @@ def validate_with_sam(
     run_id: Optional[str] = None,
     save_dir: Optional[str] = None,
     step: int = 0,
+    sam_prompt: str = DEFAULT_SAM_PROMPT,
 ):
     ds_losses = {}
     device = model_iDisc.device
@@ -81,24 +108,41 @@ def validate_with_sam(
         run_save_dir = os.path.join(save_dir, run_id)
         os.makedirs(run_save_dir, exist_ok=True)
 
+    processor = Sam3Processor(model_SAM)
+
     for i, batch in enumerate(test_loader):
-        with context:
-            torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
-            data, gt, mask = batch["image"].to(device), batch["gt"].to(device), batch["mask"].to(device)
-            hidden_states = []
+        data = batch["image"].to(device)
+        gt = batch["gt"].to(device)
+        mask = batch["mask"].to(device)
 
-            for img_tensor in data:
-                processor = Sam3Processor(model_SAM)
-                inference_state = processor.set_image(img_tensor)
-                output = processor.set_text_prompt(state=inference_state, prompt="")
-                hidden_states.append(output["hidden_states"])
-                # print(i, output["hidden_states"][:2, 0, :3, :3])
-            
-            hidden_states = torch.stack(hidden_states)
-            preds, losses, _ = model_iDisc(data, hidden_states, gt, mask)
+        batch_preds = []
+        batch_losses = {"opt": {}, "stat": {}}
 
-        losses = {k: v for l in losses.values() for k, v in l.items()}
-        for loss_name, loss_val in losses.items():
+        for img_idx in range(data.shape[0]):
+            img_tensor = data[img_idx]
+            instance_queries = extract_instance_queries(
+                processor, img_tensor, prompt=sam_prompt
+            )
+
+            with context:
+                pred, losses, _ = model_iDisc(
+                    data[img_idx : img_idx + 1],
+                    instance_queries=instance_queries,
+                    gt=gt[img_idx : img_idx + 1] if gt is not None else None,
+                    mask=mask[img_idx : img_idx + 1] if mask is not None else None,
+                )
+            batch_preds.append(pred)
+            for loss_group in losses.values():
+                for k, v in loss_group.items():
+                    if k not in batch_losses["opt"]:
+                        batch_losses["opt"][k] = v
+                    else:
+                        batch_losses["opt"][k] = batch_losses["opt"][k] + v
+
+        preds = torch.cat(batch_preds, dim=0)
+        losses_flat = {k: v / data.shape[0] for l in batch_losses.values() for k, v in l.items()}
+
+        for loss_name, loss_val in losses_flat.items():
             ds_losses[loss_name] = (
                 loss_val.detach().cpu().item() + i * ds_losses.get(loss_name, 0.0)
             ) / (i + 1)
@@ -110,7 +154,7 @@ def validate_with_sam(
     losses_all = ds_losses
     metrics_all = metrics_tracker.get_metrics()
     metrics_tracker.reset_metrics()
-    
+
     if is_main_process():
         log_losses(losses_all=losses_all)
         update_best(metrics_all=metrics_all, metrics_best="abs_rel")
@@ -119,7 +163,7 @@ def validate_with_sam(
                 json.dump({**losses_all, **metrics_all}, f)
             save_model(
                 metrics_all=metrics_all,
-                state_dict=model.state_dict(),
+                state_dict=model_iDisc.state_dict(),
                 config=config,
                 metrics_best="abs_rel",
                 run_save_dir=run_save_dir,

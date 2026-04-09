@@ -82,7 +82,7 @@ def validate(
     for i, batch in enumerate(test_loader):
         with context:
             gt, mask = batch["gt"].to(device), batch["mask"].to(device)
-            preds, losses, _ = model(batch["image"].to(device), gt, mask)
+            preds, losses, _ = model(batch["image"].to(device), gt=gt, mask=mask)
 
         losses = {k: v for l in losses.values() for k, v in l.items()}
         for loss_name, loss_val in losses.items():

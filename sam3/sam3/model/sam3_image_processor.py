@@ -14,10 +14,13 @@ from torchvision.transforms import v2
 class Sam3Processor:
     """ """
 
-    def __init__(self, model, resolution=1008, device="cuda", confidence_threshold=0.5):
+    def __init__(self, model, resolution=1008, device="cuda", confidence_threshold=0.5,
+                 top_k_queries=32, use_presence_score=True):
         self.model = model
         self.resolution = resolution
         self.device = device
+        self.top_k_queries = top_k_queries
+        self.use_presence_score = use_presence_score
         self.transform = v2.Compose(
             [
                 v2.ToDtype(torch.uint8, scale=True),
@@ -187,18 +190,30 @@ class Sam3Processor:
             geometric_prompt=state["geometric_prompt"],
             find_target=None,
         )
-        
+
         out_bbox = outputs["pred_boxes"]
         out_logits = outputs["pred_logits"]
         out_masks = outputs["pred_masks"]
-        out_probs = out_logits.sigmoid()
-        presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1)
-        out_probs = (out_probs * presence_score).squeeze(-1)
 
-        keep = out_probs > self.confidence_threshold
-        out_probs = out_probs[keep]
+        class_probs = out_logits.sigmoid()
+        presence_probs = outputs["presence_logit_dec"].sigmoid().unsqueeze(1)
+        combined_probs = (class_probs * presence_probs).squeeze(-1)
+
+        ranking_probs = combined_probs if self.use_presence_score else class_probs.squeeze(-1)
+
+        keep = combined_probs > self.confidence_threshold
+        out_probs_filtered = combined_probs[keep]
         out_masks = out_masks[keep]
         out_bbox = out_bbox[keep]
+
+        # hs: (num_layers, batch, num_queries, d_model) -- already batch-first
+        last_layer_queries = hs[-1]  # (batch, num_queries, d_model)
+
+        top_k = min(self.top_k_queries, ranking_probs.shape[-1])
+        topk_scores, topk_indices = ranking_probs.topk(top_k, dim=-1)
+        topk_indices_exp = topk_indices.unsqueeze(-1).expand(-1, -1, last_layer_queries.shape[-1])
+        instance_queries = torch.gather(last_layer_queries, 1, topk_indices_exp)
+        instance_queries = instance_queries.squeeze(0)  # (top_k, d_model)
 
         # convert to [x0, y0, x1, y1] format
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
@@ -208,16 +223,25 @@ class Sam3Processor:
         scale_fct = torch.tensor([img_w, img_h, img_w, img_h]).to(self.device)
         boxes = boxes * scale_fct[None, :]
 
-        out_masks = interpolate(
-            out_masks.unsqueeze(1),
-            (img_h, img_w),
-            mode="bilinear",
-            align_corners=False,
-        ).sigmoid()
+        if out_masks.numel() > 0:
+            out_masks = interpolate(
+                out_masks.unsqueeze(1),
+                (img_h, img_w),
+                mode="bilinear",
+                align_corners=False,
+            ).sigmoid()
 
         state["masks_logits"] = out_masks
-        state["masks"] = out_masks > 0.5
+        state["masks"] = out_masks > 0.5 if out_masks.numel() > 0 else out_masks
         state["boxes"] = boxes
-        state["scores"] = out_probs
+        state["scores"] = out_probs_filtered
         state["hidden_states"] = hs
+        state["instance_queries"] = instance_queries
+        state["topk_scores"] = topk_scores.squeeze(0)
+        state["diagnostics"] = {
+            "class_probs": class_probs.squeeze(0).squeeze(-1),
+            "presence_probs": presence_probs.squeeze(0).squeeze(-1),
+            "combined_probs": combined_probs.squeeze(0),
+            "all_boxes_cxcywh": outputs["pred_boxes"].squeeze(0),
+        }
         return state

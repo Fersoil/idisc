@@ -4,6 +4,7 @@ Licensed under the CC-BY NC 4.0 license (http://creativecommons.org/licenses/by-
 """
 
 import os
+import re
 
 import numpy as np
 import torch
@@ -65,6 +66,7 @@ class KITTIDataset(BaseDataset):
         benchmark=False,
         augmentations_db={},
         normalize=True,
+        sam3_cache_dir=None,
         **kwargs,
     ):
         super().__init__(test_mode, base_path, benchmark, normalize)
@@ -74,11 +76,18 @@ class KITTIDataset(BaseDataset):
         self.is_dense = is_dense
         self.height = 352
         self.width = 1216
+        self.sam3_cache_dir = sam3_cache_dir
 
         # load annotations
         self.load_dataset()
         for k, v in augmentations_db.items():
             setattr(self, k, v)
+
+    _EIGEN_PATH_RE = re.compile(
+        r"(\d{4}_\d{2}_\d{2})/"
+        r"(\d{4}_\d{2}_\d{2}_drive_\d{4}_sync)/"
+        r"image_02/data/(\d+)\.png"
+    )
 
     def load_dataset(self):
         self.invalid_depth_num = 0
@@ -100,6 +109,14 @@ class KITTIDataset(BaseDataset):
                 img_info["camera_intrinsics"] = self.CAM_INTRINSIC[
                     img_name.split("/")[0]
                 ][:, :3]
+
+                if self.sam3_cache_dir:
+                    m = self._EIGEN_PATH_RE.match(img_name)
+                    if m:
+                        drive, frame_str = m.group(2), m.group(3)
+                        img_info["sam3_cache_path"] = os.path.join(
+                            self.sam3_cache_dir, drive, f"{int(frame_str):010d}.pt"
+                        )
 
                 self.dataset.append(img_info)
 
@@ -137,7 +154,16 @@ class KITTIDataset(BaseDataset):
 
         info["camera_intrinsics"] = self.dataset[idx]["camera_intrinsics"].clone()
         image, gts, info = self.transform(image=image, gts={"depth": depth}, info=info)
-        return {"image": image, "gt": gts["gt"], "mask": gts["mask"]}
+
+        sample = {"image": image, "gt": gts["gt"], "mask": gts["mask"]}
+
+        cache_path = self.dataset[idx].get("sam3_cache_path")
+        if cache_path and os.path.isfile(cache_path):
+            sample["sam3_queries"] = torch.load(cache_path, weights_only=True).float()
+        else:
+            sample["sam3_queries"] = torch.zeros(0)
+
+        return sample
 
     def get_pointcloud_mask(self, shape):
         if self.crop is None:

@@ -15,6 +15,8 @@ from idisc.models.defattn_decoder import MSDeformAttnPixelDecoder
 from idisc.models.fpn_decoder import BasePixelDecoder
 from idisc.models.id_module import AFP, ISD
 
+SAM3_D_MODEL = 256
+
 
 class IDisc(nn.Module):
     def __init__(
@@ -26,6 +28,8 @@ class IDisc(nn.Module):
         loss: nn.Module,
         afp_min_resolution=1,
         eps: float = 1e-6,
+        num_resolutions: int = 3,
+        latent_dim: int = 128,
         **kwargs
     ):
         super().__init__()
@@ -36,6 +40,12 @@ class IDisc(nn.Module):
         self.isd = isd
         self.afp_min_resolution = afp_min_resolution
         self.loss = loss
+        self.num_resolutions = num_resolutions
+
+        self.sam3_proj = nn.ModuleList([
+            nn.Linear(SAM3_D_MODEL, latent_dim)
+            for _ in range(num_resolutions)
+        ])
 
     def invert_encoder_output_order(
         self, xs: Tuple[torch.Tensor, ...]
@@ -50,10 +60,19 @@ class IDisc(nn.Module):
     def forward(
         self,
         image: torch.Tensor,
-        hs = None,
+        instance_queries=None,
+        raw_idrs=None,
+        sam_mode="concat",
         gt: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ):
+        """
+        Args:
+            instance_queries: SAM3 query embeddings (32, 256) for linear projection path
+            raw_idrs: Pre-computed IDR tuple for branch/replace bypass (skips AFP and sam3_proj)
+            sam_mode: "concat" = append SAM3 IDRs to AFP IDRs (default)
+                      "replace" = use SAM3 IDRs instead of AFP IDRs
+        """
         losses = {"opt": {}, "stat": {}}
         original_shape = gt.shape[-2:] if gt is not None else image.shape[-2:]
 
@@ -65,13 +84,23 @@ class IDisc(nn.Module):
 
         decoder_outputs = self.filter_decoder_relevant_resolutions(decoder_outputs)
         fpn_outputs = self.filter_decoder_relevant_resolutions(fpn_outputs)
-        # print("BOKMS", hs.shape)
-        if hs == None:
-            idrs = self.afp(decoder_outputs)
+
+        if raw_idrs is not None:
+            # Branch/replace bypass: use pre-computed IDRs directly (e.g. old avg_pool2d path)
+            idrs = raw_idrs
+        elif instance_queries is not None and instance_queries.shape[0] > 0:
+            iq = instance_queries.unsqueeze(0) if instance_queries.dim() == 2 else instance_queries
+            sam_idrs = tuple(proj(iq) for proj in self.sam3_proj)
+            if sam_mode == "replace":
+                idrs = sam_idrs
+            else:  # concat (default)
+                idrs = self.afp(decoder_outputs)
+                idrs = tuple(
+                    torch.cat([afp_idr, sam_idr], dim=1)
+                    for afp_idr, sam_idr in zip(idrs, sam_idrs)
+                )
         else:
-            x = torch.mean(hs, dim=1)
-            x = torch.nn.functional.adaptive_avg_pool2d(x, (32, 128)).squeeze(1)
-            idrs = (x, x.clone(), x.clone())
+            idrs = self.afp(decoder_outputs)
         outs = self.isd(fpn_outputs, idrs)
 
         out_lst = []
@@ -128,7 +157,7 @@ class IDisc(nn.Module):
         new_state_dict = deepcopy(
             {k.replace("module.", ""): v for k, v in dict_model.items()}
         )
-        self.load_state_dict(new_state_dict)
+        self.load_state_dict(new_state_dict, strict=False)
 
     def get_params(self, config):
         backbone_lr = config["model"]["pixel_encoder"].get(
@@ -139,8 +168,9 @@ class IDisc(nn.Module):
             {"params": self.afp.parameters()},
             {"params": self.isd.parameters()},
             {"params": self.pixel_encoder.parameters()},
+            {"params": self.sam3_proj.parameters()},
         ]
-        max_lrs = [config["training"]["lr"]] * 3 + [backbone_lr]
+        max_lrs = [config["training"]["lr"]] * 3 + [backbone_lr] + [config["training"]["lr"]]
         return params, max_lrs
 
     @property
@@ -185,5 +215,7 @@ class IDisc(nn.Module):
                 loss=loss,
                 afp_min_resolution=len(pixel_encoder_embed_dims)
                 - config["model"]["isd"]["num_resolutions"],
+                num_resolutions=config["model"]["isd"]["num_resolutions"],
+                latent_dim=config["model"]["afp"]["latent_dim"],
             )
         )

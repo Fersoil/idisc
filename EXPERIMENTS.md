@@ -1,127 +1,163 @@
 # Experiments
 
-```bash
-sbatch scripts/experiments/run_experiment.sh <ID>
+KITTI Eigen split, pretrained iDisc ResNet-101. Run: `sbatch scripts/experiments/run_experiment.sh <ID>`
+
+---
+
+## Architecture
+
+```
+Image (3, 352, 1216)
+  -> pixel_encoder  (ResNet-101, 44.5M)         FROZEN
+  -> pixel_decoder  (MSDeformAttn FPN, 9.1M)    FROZEN
+  -> AFP            (0.7M)                       FROZEN
+  |    32 latents x 128-dim per resolution, 2 iters cross-attn from decoder
+  |    output = IDRs (1, 32, 128) x 3 res
+  -> sam3_proj      (0.1M) = 3 x Linear(256->128)   NEW, trainable in F exps
+  |    projects SAM3 queries into IDR space
+  |    output = (1, N, 128) x 3 res
+  -> ISD            (4.5M)                       trainable in F exps
+  |    3 heads x 2 depth cross-attn (pixels attend to IDRs)
+  -> Depth (1, 1, 352, 1216)
+
+Total = 59.0M. Fine-tuning trains sam3_proj + ISD = 4.6M (7.9%)
 ```
 
----
+### SAM3 (frozen, external)
 
-## 1 SAM3 Detection on KITTI
+- **Image processor**: SAM3 on single image + text prompt -> top-K queries (256-dim) by detection score. Used in E2-E9, F1-F3.
+- **Video predictor**: SAM3 with tracking across drive sequence -> all 200 queries/frame by L2 norm, saved as .pt. Used via cache in E10, F4.
 
-| Prompt | class_prob (mean) | presence (mean) | combined (mean) | detections > 0.5 |
-|--------|-------------------|-----------------|-----------------|-----------------|
-| Multi-class `"car . truck . person..."` | 0.56 | **0.064** | 0.04 | 0.0 per image |
-| Single-class (run 8x, once per class) | 0.71 | **0.84** | 0.60 | 2.7 per image |
+### Integration modes
 
+| Mode | ISD sees | AFP? | sam3_proj? |
+|------|----------|------|------------|
+| baseline | AFP IDRs (32, 128) x3 | y | n |
+| branch | avg_pool2d(mean(hs), (32,128)) x3 | n | n |
+| replace | sam3_proj(q) -> (N, 128) x3 | n | y |
+| concat | cat(AFP, sam3_proj(q)) -> (32+N, 128) x3 | y | y |
 
-| ID | Setup | Command |
-|----|-------|---------|
-| `D1-no-prompt` | No text prompt, SAM inference only | `sbatch scripts/experiments/run_experiment.sh D1-no-prompt` |
-| `D2-singleclass` | Per-class x8 | `sbatch scripts/experiments/run_experiment.sh D2-singleclass` |
-| `D3-multiclass` | One multi-class prompt | `sbatch scripts/experiments/run_experiment.sh D3-multiclass` |
-| `D4-classonly` | Class-logit only (no presence multiplication) | `sbatch scripts/experiments/run_experiment.sh D4-classonly` |
+branch = old s-seq code, avg_pool2d destroys info, same tensor cloned x3.
 
+### Prompts
 
----
+| Mode | Prompt | presence |
+|------|--------|----------|
+| multiclass | `"car . truck . person . bicycle . building . tree . road sign . pole"` | 0.064 |
+| singleclass | run 8x, one class each, merge top-32 | 0.84 |
+| classonly | = multiclass but no presence score | - |
 
-## 2 SAM3 + iDisc
+singleclass >> multiclass for detection quality.
 
-### No training
+### Video cache (C1)
 
-| ID | What | abs_rel | rmse | d1 | Notes | Command |
-|----|------|---------|------|----|-------|---------|
-| `E1-baseline` | Baseline (AFP only, no SAM) | 0.0600 | 2.363 | 0.964 | Reference | `...run_experiment.sh E1-baseline` |
-| `E2-branch-empty` | s-seq branch code | 0.0662 | 2.452 | 0.959 | avg_pool2d, empty prompt | `...run_experiment.sh E2-branch-empty` |
-| `E3-branch-multiclass` | s-seq + multi-class prompt | 0.0665 | 2.449 | 0.960 | Only prompt changed | `...run_experiment.sh E3-branch-multiclass` |
-| `E4-branch-singleclass` | s-seq + single-class prompt | 0.0685 | 2.447 | 0.960 | Only prompt changed | `...run_experiment.sh E4-branch-singleclass` |
-| `E5-replace-multiclass` | Linear proj replaces AFP, multi-class | 0.0646 | - | 0.960 | Top-32 queries | `...run_experiment.sh E5-replace-multiclass` |
-| `E6-replace-singleclass` | Linear proj replaces AFP, single-class | 0.0646 | - | 0.960 | Top-32 queries | `...run_experiment.sh E6-replace-singleclass` |
-| `E7-concat-multiclass` | Linear proj concat with AFP, multi-class | 0.0605 | 2.363 | 0.964 | AFP preserved | `...run_experiment.sh E7-concat-multiclass` |
-| `E8-concat-singleclass` | Linear proj concat with AFP, single-class | 0.0603 | 2.362 | 0.964 | Nearly baseline | `...run_experiment.sh E8-concat-singleclass` |
-| `E9-concat-classonly` | Linear proj concat with AFP, class-logit only | 0.0605 | 2.363 | 0.964 | | `...run_experiment.sh E9-concat-classonly` |
-| `E10-concat-video` | Concat with AFP, cached video queries | | | | Not yet run | `...run_experiment.sh E10-concat-video` |
-
-### Fine-tuning (AdamW lr=5e-5, OneCycleLR, 5000 steps, batch 2)
-
-| ID | What | Best abs_rel | Step | vs Baseline | Command |
-|----|------|-------------|------|-------------|---------|
-| `F1-replace-multiclass` | Replace AFP, multi-class, online SAM | 0.0600 | 2500 | Same | `...run_experiment.sh F1-replace-multiclass` |
-| `F2-replace-singleclass` | Replace AFP, single-class, online SAM | 0.0609 | 1000 | +1.6% worse | `...run_experiment.sh F2-replace-singleclass` |
-| `F3-concat-singleclass` | Concat with AFP, single-class, online SAM | 0.0591 | 2000 | -1.5% but unstable | `...run_experiment.sh F3-concat-singleclass` |
-| `F4-concat-video` | Concat with AFP, cached video queries | | | Not yet run | `...run_experiment.sh F4-concat-video` |
-
-### Eval fine-tuned model
-
-| ID | What | Command |
-|----|------|---------|
-| `E1-ft-baseline` | F4 checkpoint, AFP only (regression check) | `...run_experiment.sh E1-ft-baseline` |
-| `E10-ft-video` | F4 checkpoint + cached video queries | `...run_experiment.sh E10-ft-video` |
-
-### Prerequisite
-
-| ID | What | Command |
-|----|------|---------|
-| `C1-cache-video` | Pre-compute SAM3 video queries for all seqs (~2h) | `...run_experiment.sh C1-cache-video` |
+61 seqs, 23,855 frames. All 200 queries saved per frame (float16). Dataloader picks top-32 by L2 norm (`sam3_top_k`).
 
 ---
 
-## Code changes
+## 1 Detection only (no depth)
 
-What was chnaged:
-- Replaced `adaptive_avg_pool2d` with `nn.Linear(256, 128)` per resolution
-- Select top-32 queries by detection score (not average all 200)
-- Single-class prompting
-- Found that iDisc normalizes images before passing to SAM3 (double normalization, SAM does this too), added denormalization before SAM3
+| Prompt | class_prob | presence | combined | det > 0.5 |
+|--------|-----------|----------|----------|-----------|
+| multiclass | 0.56 | 0.064 | 0.04 | 0.0/img |
+| singleclass x8 | 0.71 | 0.84 | 0.60 | 2.7/img |
+
+IDs: `D1-no-prompt`, `D2-singleclass`, `D3-multiclass`, `D4-classonly`
+
+---
+
+## 2 Depth eval, no training
+
+Everything frozen, sam3_proj = random init.
+
+| ID | Mode | Prompt | abs_rel ↓ | rmse ↓ | d1 ↑ |
+|----|------|--------|-----------|--------|------|
+| E1 | baseline | - | **0.0600** | **2.363** | **0.964** |
+| E2 | branch | empty | 0.0662 | 2.447 | 0.960 |
+| E3 | branch | multiclass | 0.0666 | 2.457 | 0.959 |
+| E4 | branch | singleclass | 0.0660 | 2.436 | 0.960 |
+| E5 | replace | multiclass | 0.0663 | 2.402 | 0.962 |
+| E6 | replace | singleclass | 0.0699 | 2.394 | 0.962 |
+| E7 | concat | multiclass | 0.0602 | 2.364 | 0.964 |
+| E8 | concat | singleclass | 0.0604 | 2.363 | 0.964 |
+| E9 | concat | classonly | 0.0603 | 2.363 | 0.964 |
+| E10 | concat | cached video | 0.0608 | 2.364 | 0.964 |
+
+- branch = ~10% worse
+- replace = worse, random proj + untrained ISD
+- concat = ~baseline, AFP helps, random SAM3 tokens ignored
+
+---
+
+## 3 Fine-tuning
+
+Frozen: pixel_encoder + pixel_decoder + AFP. Trainable: sam3_proj + ISD = 4.6M (7.9%).
+AdamW lr=5e-5, OneCycleLR, 5000 iters, batch 2, val/500 steps.
+
+| ID | Mode | Queries | abs_rel ↓ | rmse ↓ | d1 ↑ | Step | vs E1 |
+|----|------|---------|-----------|--------|------|------|-------|
+| F1 | replace | online multiclass | 0.0600 | 2.430 | 0.962 | 2000 | +0.1% |
+| F2 | replace | online singleclass | 0.0599 | 2.420 | 0.962 | 2500 | -0.1% |
+| F3 | concat | online singleclass | **0.0591** | 2.432 | **0.963** | 2000 | **-1.5%** |
+| F4 | concat | cached video | 0.0593 | 2.436 | 0.962 | 4000 | -1.2% |
+
+- replace recovers to baseline but doesn't beat it
+- concat improves: AFP = stable base, SAM3 = extra signal. F3 best at -1.5%
+- F3 > F4: online singleclass slightly better than cached video
+- rmse trade-off: all F exps ~2.43 vs 2.36 baseline (better rel error, worse abs on far objects)
+
+---
+
+## 4 Eval F4 checkpoint
+
+Does fine-tuning ISD break AFP pathway?
+
+| ID | What | abs_rel ↓ | rmse ↓ | d1 ↑ |
+|----|------|-----------|--------|------|
+| E1-ft | AFP only | 0.0598 | 2.415 | 0.962 |
+| E10-ft | AFP + cached video | 0.0593 | 2.436 | 0.962 |
+
+- No regression: E1-ft (0.0598) ≈ E1 (0.0600)
+- E10-ft (0.0593) < E10 (0.0608) -> fine-tuning taught ISD to use SAM3 features
 
 ---
 
 ## Run order
 
 ```
-D1 → D2 → D3 → D4                        SAM3 detection (no deps)
-E1-baseline                                iDisc baseline (no deps)
-E2 → E3 → E4                              Branch s-seq (no deps)
-E5 → E6                                   Replace AFP (no deps)
-E7 → E8 → E9                              Concat with AFP (no deps)
-C1-cache-video                             Cache video queries (~2h, no deps)
-E10-concat-video                           needs C1
-F1 → F2 → F3                              Finetune online SAM (no deps)
-F4-concat-video                            needs C1
-E1-ft-baseline                             needs F4
-E10-ft-video                               needs F4 + C1
+D1->D2->D3->D4       detection, no deps
+E1                    baseline
+E2->E3->E4            branch
+E5->E6                replace
+E7->E8->E9            concat
+C1-cache-video        ~4h
+E10                   needs C1
+F1->F2->F3            fine-tune online SAM
+F4                    needs C1
+E1-ft                 needs F4
+E10-ft                needs F4+C1
 ```
 
 ---
 
-## File structure
+## Files
 
 | Path | What |
 |------|------|
-| `scripts/experiments/run_experiment.sh` | Entry point for all experiments |
-| `scripts/experiments/eval_comparison.py` | Eval script (needs `--variant`, `--prompt-mode`) |
-| `scripts/experiments/finetune_sam.py` | Fine-tune (needs `--mode`, `--prompt-mode`) |
-| `scripts/experiments/train.py` | Original iDisc training |
-| `scripts/data/cache_sam3_video.py` | Cache SAM3 video queries to disk |
-| `scripts/data/parse_sequences.py` | Parse KITTI sequences from Eigen splits |
-| `scripts/utils/` | lint, shell helpers |
-| `idisc/models/idisc.py` | Main model, `forward()` accepts `instance_queries` |
-| `idisc/dataloders/kitti.py` | KITTI loader, supports `sam3_cache_dir` |
-| `sam3/sam3/model/sam3_image_processor.py` | Modified to expose instance queries |
+| `scripts/experiments/run_experiment.sh` | SLURM dispatcher |
+| `scripts/experiments/eval_depth.py` | depth eval (E exps) |
+| `scripts/experiments/eval_sam.py` | detection eval (D exps) |
+| `scripts/experiments/finetune_sam.py` | fine-tune sam3_proj+ISD (F exps) |
+| `scripts/data/cache_sam3_video.py` | cache video queries (C1) |
+| `idisc/models/idisc.py` | main model, forward() w/ instance_queries, sam_mode |
+| `idisc/models/id_module.py` | AFP + ISD |
+| `idisc/dataloders/kitti.py` | dataloader w/ sam3_cache_dir |
 
----
+## Changes from original iDisc
 
-## Notes
-
-`eval_comparison.py` needs these `--variant` values implemented:
-- `baseline` -- iDisc AFP only
-- `branch` -- old s-seq code path (avg_pool2d, same IDRs for all resolutions)
-- `sam-replace` -- linear projection replaces AFP entirely
-- `sam-multiclass`, `sam-singleclass`, `sam-classonly` -- concat with AFP
-- `sam-cached-video` -- concat with AFP using cached video queries
-- `sam-detection-only` -- SAM3 detection stats only, no depth
-
-`finetune_sam.py` needs these args implemented:
-- `--mode replace|concat` -- replace AFP or concat
-- `--prompt-mode multiclass|singleclass` -- how to prompt SAM3 (for online inference)
-- `--sam-checkpoint` -- for online SAM3 inference (F1/F2/F3)
-- `--sam3-cache-dir` -- for cached video queries (F4)
+1. sam3_proj = 3 x Linear(256->128) to project SAM3 queries into IDR space
+2. forward() accepts instance_queries + raw_idrs + sam_mode for replace/concat/branch
+3. KITTIDataset: sam3_cache_dir + sam3_top_k, loads .pt files, picks top-K by L2 norm
+4. Sam3Processor: exposed instance_queries + topk_scores
+5. Added denormalization before SAM3 (was double-normalizing w/ ImageNet stats)
+6. Replaced avg_pool2d from s-seq branch w/ linear projection

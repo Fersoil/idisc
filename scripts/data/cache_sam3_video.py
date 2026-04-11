@@ -27,8 +27,8 @@ from PIL import Image
 
 KITTI_CLASSES = ["car", "truck", "person", "bicycle", "building", "tree", "road sign", "pole"]
 
-MAX_CHUNK_FRAMES = 400
-CHUNK_OVERLAP = 50
+MAX_CHUNK_FRAMES = 100
+CHUNK_OVERLAP = 10
 
 
 def propagate_and_collect(predictor, session_id):

@@ -124,7 +124,7 @@ def main():
     parser.add_argument("--base-path", required=True)
     parser.add_argument("--sam-checkpoint", default=None)
     parser.add_argument("--sam3-cache-dir", default=None)
-    parser.add_argument("--output-dir", default="eval_results")
+    parser.add_argument("--output-dir", default="results")
     args = parser.parse_args()
 
     variant = args.variant

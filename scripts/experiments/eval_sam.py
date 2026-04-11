@@ -108,7 +108,7 @@ def main():
                         help="iDisc model (only used to load the dataset config)")
     parser.add_argument("--base-path", required=True)
     parser.add_argument("--sam-checkpoint", required=True)
-    parser.add_argument("--output-dir", default="eval_results")
+    parser.add_argument("--output-dir", default="results")
     args = parser.parse_args()
 
     with open(args.config_file) as f:

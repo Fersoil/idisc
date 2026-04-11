@@ -67,6 +67,7 @@ class KITTIDataset(BaseDataset):
         augmentations_db={},
         normalize=True,
         sam3_cache_dir=None,
+        sam3_top_k=32,
         **kwargs,
     ):
         super().__init__(test_mode, base_path, benchmark, normalize)
@@ -77,6 +78,7 @@ class KITTIDataset(BaseDataset):
         self.height = 352
         self.width = 1216
         self.sam3_cache_dir = sam3_cache_dir
+        self.sam3_top_k = sam3_top_k
 
         # load annotations
         self.load_dataset()
@@ -159,7 +161,12 @@ class KITTIDataset(BaseDataset):
 
         cache_path = self.dataset[idx].get("sam3_cache_path")
         if cache_path and os.path.isfile(cache_path):
-            sample["sam3_queries"] = torch.load(cache_path, weights_only=True).float()
+            queries = torch.load(cache_path, weights_only=True).float()
+            if self.sam3_top_k and queries.shape[0] > self.sam3_top_k:
+                norms = queries.norm(dim=-1)
+                _, top_idx = norms.topk(self.sam3_top_k)
+                queries = queries[top_idx]
+            sample["sam3_queries"] = queries
         else:
             sample["sam3_queries"] = torch.zeros(0)
 

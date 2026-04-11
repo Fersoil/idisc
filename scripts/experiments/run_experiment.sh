@@ -3,7 +3,7 @@
 # Usage: sbatch scripts/experiments/run_experiment.sh <EXPERIMENT_ID>
 #
 # Every experiment in EXPERIMENTS.md maps to an ID here.
-# Results: eval_results/<ID>/metrics.json
+# Results: results/<ID>/metrics.json
 # Logs:    logs/iDisc-exp_<JOB>.out
 #
 # ┌─────────────────────────────┬──────────────────────────────────────────────┐
@@ -60,7 +60,7 @@ KITTI_ROOT="/work/courses/3dv/team17/idisc/datasets/kitti"
 FINETUNE_CKPT="$IDISC_REPO/finetune_output/kitti-best.pt"
 
 EXP_ID="${1:?Usage: sbatch scripts/experiments/run_experiment.sh <EXPERIMENT_ID>}"
-OUTPUT_DIR="$IDISC_REPO/eval_results/$EXP_ID"
+OUTPUT_DIR="$IDISC_REPO/results/$EXP_ID"
 EVAL_SAM="scripts/experiments/eval_sam.py"
 EVAL_DEPTH="scripts/experiments/eval_depth.py"
 FTUNE="scripts/experiments/finetune_sam.py"
@@ -95,25 +95,25 @@ case "$EXP_ID" in
   D1-no-prompt)
     python -u "$EVAL_SAM" --prompt-mode none \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   D2-singleclass)
     python -u "$EVAL_SAM" --prompt-mode singleclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   D3-multiclass)
     python -u "$EVAL_SAM" --prompt-mode multiclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   D4-classonly)
     python -u "$EVAL_SAM" --prompt-mode classonly \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   # ════════════════════════════════════════════
@@ -123,7 +123,7 @@ case "$EXP_ID" in
   E1-baseline)
     python -u "$EVAL_DEPTH" --variant baseline \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results
+      --output-dir "$OUTPUT_DIR"
     ;;
 
   # -- Legacy s-seq (avg_pool2d, reproducing old branch bugs) --
@@ -131,19 +131,19 @@ case "$EXP_ID" in
   E2-branch-empty)
     python -u "$EVAL_DEPTH" --variant branch --prompt-mode empty \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   E3-branch-multiclass)
     python -u "$EVAL_DEPTH" --variant branch --prompt-mode multiclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   E4-branch-singleclass)
     python -u "$EVAL_DEPTH" --variant branch --prompt-mode singleclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   # -- Replace AFP with linear projection --
@@ -151,13 +151,13 @@ case "$EXP_ID" in
   E5-replace-multiclass)
     python -u "$EVAL_DEPTH" --variant sam-replace --prompt-mode multiclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   E6-replace-singleclass)
     python -u "$EVAL_DEPTH" --variant sam-replace --prompt-mode singleclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   # -- Concat with AFP (linear proj + AFP preserved) --
@@ -165,25 +165,25 @@ case "$EXP_ID" in
   E7-concat-multiclass)
     python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode multiclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   E8-concat-singleclass)
     python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode singleclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   E9-concat-classonly)
     python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode classonly \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam-checkpoint "$SAM_CKPT"
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
   E10-concat-video)
     python -u "$EVAL_DEPTH" --variant sam-cached-video \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam3-cache-dir "$SAM3_CACHE"
+      --output-dir "$OUTPUT_DIR" --sam3-cache-dir "$SAM3_CACHE"
     ;;
 
   # ════════════════════════════════════════════
@@ -233,13 +233,13 @@ case "$EXP_ID" in
   E1-ft-baseline)
     python -u "$EVAL_DEPTH" --variant baseline \
       --config-file "$CFG" --model-file "$FINETUNE_CKPT" --base-path "$BASE_PATH" \
-      --output-dir eval_results
+      --output-dir "$OUTPUT_DIR"
     ;;
 
   E10-ft-video)
     python -u "$EVAL_DEPTH" --variant sam-cached-video \
       --config-file "$CFG" --model-file "$FINETUNE_CKPT" --base-path "$BASE_PATH" \
-      --output-dir eval_results --sam3-cache-dir "$SAM3_CACHE"
+      --output-dir "$OUTPUT_DIR" --sam3-cache-dir "$SAM3_CACHE"
     ;;
 
   # ════════════════════════════════════════════
@@ -249,7 +249,7 @@ case "$EXP_ID" in
   C1-cache-video)
     python -u scripts/data/cache_sam3_video.py \
       --manifest "$MANIFEST" --kitti-root "$KITTI_ROOT" \
-      --cache-dir "$SAM3_CACHE" --checkpoint "$SAM_CKPT" --top-k 32
+      --cache-dir "$SAM3_CACHE" --checkpoint "$SAM_CKPT" --top-k 200
     ;;
 
   *)

@@ -28,6 +28,25 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
+Also, to reduce the storage use, you can point the cache to scratch:
+
+```bash
+# Pip cache (wheels/downloads)
+export PIP_CACHE_DIR="/work/scratch/$USER/pip-cache"
+mkdir -p $PIP_CACHE_DIR
+alias pip="pip --cache-dir $PIP_CACHE_DIR"  # Or use globally
+
+
+# PyTorch Hub (timm models, etc.)
+export TORCH_HOME="/work/scratch/$USER/.cache/torch"
+# In Python: import torch; torch.hub.set_dir(f"{TORCH_HOME}/hub")
+
+# Verify
+pip cache dir  # /work/scratch/$USER/pip-cache
+echo $HF_HUB_CACHE  # /work/scratch/$USER/.cache/huggingface/hub
+python -c "import torch; print(torch.hub.get_dir())"  # $TORCH_HOME/hub
+```
+
 ### 3. Install PyTorch + project requirements
 
 Check the CUDA version from step 1 and pick a matching PyTorch wheel from
@@ -36,6 +55,11 @@ Here we use cuda 12.8 that supports GPUs used in the student cluster:
 
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128 # this should match module version
+
+# install sam3
+pip install sam3/
+
+# install idisc requirements
 pip install -r requirements.txt
 
 ```
@@ -67,53 +91,27 @@ bash make.sh
 
 ```
 Now the module should be fresh and clean ;).
-### 5. Run training / testing
 
-```bash
 
-export CHECKPOINTS_PATH="/work/courses/3dv/team17/models"
-export BASE_PATH="/work/courses/3dv/team17/idisc"
+### 5. Download SAM3 weights
 
-cd $IDISC_REPO_PATH
-
-python scripts/test.py --model-file $CHECKPOINTS_PATH/nyu_resnet101.pt \
-  --config-file configs/nyu/nyu_r101.json \
-  --base-path $BASE_PATH
-```
-
-### 6. Install SAM3
-
-All of our current experiments use SAM3 module. SAM3 lies under `sam3/` and must be installed as a regular package.
-
-```bash
-source .venv/bin/activate
-# install if not installed previously
-pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu128
-
-pip install -e ".[notebooks]"
-```
 
 Now, we want to download the SAM3 checkpoint to scratch:
 
 ```bash
+export CHECKPOINTS_PATH="/work/courses/3dv/team17/models"
+
+source .venv/bin/activate
 # auth to huggingface
 hf auth login
 
 python3 << 'EOF'
 from huggingface_hub import snapshot_download
 import os
-snapshot_download(repo_id='facebook/sam3', local_dir=f'/work/scratch/{os.getenv("USER")}/sam3_checkpoints')
+snapshot_download(repo_id='facebook/sam3', local_dir=os.path.join(os.environ['CHECKPOINTS_PATH'], 'sam3_checkpoints'))
 EOF
 ```
-
-
-Finally, install the `sam3/` module.
-
-```bash
-pip install sam3/
-```
-
-### 7. Run the experiments!
+### 6. Run the experiments!
 
 Just run 
 ```bash
@@ -131,21 +129,41 @@ For a detailed description on how to run the experiments please refer to [experi
 ### Notes
 
 
-If you change stacks or CUDA versions, rebuild the ops extension (`rm -rf build && bash ./make.sh`).
+### Notes
 
-Remember to use cuda version supported by Blackwell GPU used in student cluster, some [docs](https://developer.nvidia.com/cuda/gpus), also look up the `TORCH_CUDA_ARCH_LIST` in [make.sh](idisc/models/ops/make.sh).
+**Rebuild ops on changes:**
+- If you change stacks or CUDA versions: `rm -rf build && bash ./make.sh` [in `idisc/models/ops/`].
 
+**CUDA compatibility:**
+- Use CUDA version supported by Blackwell GPUs (RTX 50 series): [NVIDIA CUDA GPUs](https://developer.nvidia.com/cuda/gpus).
+- Check `TORCH_CUDA_ARCH_LIST` in [make.sh](idisc/models/ops/make.sh).
 
-You might also need to adjust the source paths for you dataset. 
+**Dataset paths:**
+- Adjust source paths for your dataset as needed.
 
-
-For faster inference you might want to install:
+**Optional optimizations:**
 ```bash
 pip install einops ninja && pip install flash-attn-3 --no-deps --index-url https://download.pytorch.org/whl/cu128
 pip install git+https://github.com/ronghanghu/cc_torch.git
 ```
 
+**SAM3 notebooks:**
+```bash
+source .venv/bin/activate
+pip install -e ".[notebooks]"
+```
 
+**Test iDisc directly:**
+```bash
+export CHECKPOINTS_PATH="/work/courses/3dv/team17/models"
+export BASE_PATH="/work/courses/3dv/team17/idisc"
+
+cd $IDISC_REPO_PATH
+
+python scripts/experiments/test.py --model-file $CHECKPOINTS_PATH/kitti_resnet101.pt \
+  --config-file configs/kitti/kitti_r101.json \
+  --base-path $BASE_PATH
+```
 
 
 ## Experimental setup for Euler (deprecated)

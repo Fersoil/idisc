@@ -15,7 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))   # append, not insert — venv packages win
 from idisc.utils.config_bridge import build_runtime_config, save_resolved_config
-from idisc.utils.tracking import finish_tracking, init_tracking, log_error, log_metrics, log_summary
+from idisc.utils.tracking import (
+    finish_tracking,
+    init_tracking,
+    log_artifact,
+    log_error,
+    log_metrics,
+    log_summary,
+)
 
 
 def _git_value(args: list[str], fallback: str = "unknown") -> str:
@@ -138,6 +145,12 @@ def main(cfg: DictConfig) -> None:
             log_payload["meta/git_commit"] = git_commit
             log_metrics(log_payload)
             log_summary(log_payload)
+            log_artifact(
+                run_dir,
+                name=f"{exp_id}-run-output",
+                artifact_type="run-output",
+                metadata={"task": task, "exp_id": exp_id},
+            )
 
         elif task == "eval_sam":
             from scripts.experiments.eval_sam import run_eval_sam
@@ -159,6 +172,12 @@ def main(cfg: DictConfig) -> None:
             }
             log_metrics(log_payload)
             log_summary(log_payload)
+            log_artifact(
+                run_dir,
+                name=f"{exp_id}-run-output",
+                artifact_type="run-output",
+                metadata={"task": task, "exp_id": exp_id},
+            )
 
         elif task == "finetune":
             from scripts.experiments.finetune_sam import run_finetune
@@ -188,6 +207,12 @@ def main(cfg: DictConfig) -> None:
                     log_payload[f"finetune/{key}"] = value
             log_metrics(log_payload)
             log_summary(log_payload)
+            log_artifact(
+                run_dir,
+                name=f"{exp_id}-run-output",
+                artifact_type="finetune-output",
+                metadata={"task": task, "exp_id": exp_id},
+            )
 
         elif task == "cache":
             from scripts.data.cache_sam3_video import run_cache
@@ -212,6 +237,12 @@ def main(cfg: DictConfig) -> None:
             }
             log_metrics(log_payload)
             log_summary(log_payload)
+            log_artifact(
+                run_dir,
+                name=f"{exp_id}-run-output",
+                artifact_type="cache-output",
+                metadata={"task": task, "exp_id": exp_id},
+            )
 
         else:
             raise ValueError(

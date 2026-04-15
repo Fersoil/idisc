@@ -88,6 +88,28 @@ def log_summary(metrics: dict[str, Any]) -> None:
         _ACTIVE_RUN.summary[key] = value
 
 
+def log_artifact(
+    artifact_path: str | Path,
+    name: str | None = None,
+    artifact_type: str = "run-output",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Log a file or directory as a W&B artifact for traceability."""
+    if _ACTIVE_BACKEND != "wandb" or _ACTIVE_RUN is None:
+        return
+
+    import wandb
+
+    path = Path(artifact_path)
+    artifact_name = name or path.name
+    artifact = wandb.Artifact(name=artifact_name, type=artifact_type, metadata=metadata or {})
+    if path.is_dir():
+        artifact.add_dir(str(path))
+    else:
+        artifact.add_file(str(path))
+    _ACTIVE_RUN.log_artifact(artifact)
+
+
 def log_error(error: Exception) -> None:
     """Log exception details to W&B (traceback + metadata)."""
     if _ACTIVE_BACKEND != "wandb" or _ACTIVE_RUN is None:

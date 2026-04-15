@@ -1,9 +1,10 @@
 defaults:
   - dataset: kitti
+  - _self_
   - experiment: baseline
   - paths: cluster
   - tracking: wandb
-  - _self_
+  - finetune: default
 
 run:
   task: eval
@@ -11,11 +12,14 @@ run:
   name: ${run.exp_id}
 
 method:
-  variant: baseline
-  use_sam: false
-  prompt_mode: multiclass
-  hidden_state_pooling: null
-  inject_into: null
+  idr_source: afp
+  sam_mode: none
+  query_source: online
+  prompt:
+    mode: none
+    classes: []
+    use_bbox: false
+    strategy: none
 
 tags: []
 

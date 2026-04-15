@@ -1,0 +1,20 @@
+# @package _global_
+
+run:
+  exp_id: F3-concat-singleclass
+  task: finetune
+
+method:
+  idr_source: afp
+  sam_mode: concat
+  query_source: online
+  prompt:
+    mode: singleclass
+    classes: [car, truck, person, bicycle, motorcycle, bus, train]
+    use_bbox: true
+    strategy: top1_by_confidence
+
+tags:
+  - finetune
+  - concat
+  - singleclass

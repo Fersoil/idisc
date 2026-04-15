@@ -16,7 +16,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from idisc.utils.config_bridge import build_runtime_config, save_resolved_config
 from idisc.utils.tracking import finish_tracking, init_tracking, log_metrics, log_summary
-from scripts.experiments.eval_depth import run_eval
 
 
 def _git_value(args: list[str], fallback: str = "unknown") -> str:
@@ -39,7 +38,7 @@ def _build_manifest(
         "git_branch": git_branch,
         "git_commit": git_commit,
         "dataset_name": cfg.get("dataset", {}).get("dataset_name"),
-        "experiment_variant": cfg.get("method", {}).get("variant"),
+        "experiment_variant": cfg.get("variant"),
         "legacy_config_path": cfg.get("dataset", {}).get("legacy_config_path"),
         "tracking_backend": cfg.get("tracking", {}).get("backend", "none"),
         "output_directory": str(run_dir),
@@ -106,28 +105,98 @@ def main(cfg: DictConfig) -> None:
 
     try:
         task = runtime_cfg.get("run", {}).get("task", "eval")
-        if task != "eval":
-            raise ValueError(f"Unsupported run.task in Stage 1: {task}")
+        if task == "eval":
+            from scripts.experiments.eval_depth import run_eval
 
-        eval_cfg = {
-            "variant": runtime_cfg["method"]["variant"],
-            "prompt_mode": runtime_cfg["method"].get("prompt_mode", "multiclass"),
-            "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
-            "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
-            "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-            "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
-            "output_dir": str(run_dir),
-            "config": runtime_cfg,
-        }
+            eval_cfg = {
+                "variant": runtime_cfg["variant"],
+                "prompt_mode": runtime_cfg.get("prompt_mode", "multiclass"),
+                "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
+                "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
+                "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
+                "sam3_cache_dir": _resolve_path(runtime_cfg.get("sam3_cache_dir")),
+                "output_dir": str(run_dir),
+                "config": runtime_cfg,
+            }
+            metrics = run_eval(eval_cfg)
+            _write_json(run_dir / "metrics.json", metrics)
+            log_payload = {f"eval/{k}": v for k, v in metrics.items()}
+            log_payload["meta/git_branch"] = git_branch
+            log_payload["meta/git_commit"] = git_commit
+            log_metrics(log_payload)
+            log_summary(log_payload)
 
-        metrics = run_eval(eval_cfg)
-        _write_json(run_dir / "metrics.json", metrics)
+        elif task == "eval_sam":
+            from scripts.experiments.eval_sam import run_eval_sam
 
-        metrics_for_tracking = {f"eval/{k}": v for k, v in metrics.items()}
-        metrics_for_tracking["meta/git_branch"] = git_branch
-        metrics_for_tracking["meta/git_commit"] = git_commit
-        log_metrics(metrics_for_tracking)
-        log_summary(metrics_for_tracking)
+            eval_cfg = {
+                "prompt_mode": runtime_cfg.get("prompt_mode", "none"),
+                "config_file": _resolve_path(runtime_cfg["dataset"]["legacy_config_path"]),
+                "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
+                "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
+                "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
+                "output_dir": str(run_dir),
+                "config": runtime_cfg,
+            }
+            metrics = run_eval_sam(eval_cfg)
+            _write_json(run_dir / "metrics.json", metrics)
+            log_payload = {"meta/git_branch": git_branch, "meta/git_commit": git_commit}
+            log_metrics(log_payload)
+            log_summary(log_payload)
+
+        elif task == "finetune":
+            from scripts.experiments.finetune_sam import run_finetune
+
+            finetune_output = _resolve_path(runtime_cfg["finetune"]["output_dir"])
+            finetune_cfg = {
+                "variant": runtime_cfg["variant"],
+                "prompt_mode": runtime_cfg.get("prompt_mode", "multiclass"),
+                "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
+                "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
+                "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
+                "sam3_cache_dir": _resolve_path(runtime_cfg.get("sam3_cache_dir")),
+                "config": runtime_cfg,
+                "finetune": {
+                    **runtime_cfg["finetune"],
+                    "output_dir": finetune_output,
+                },
+            }
+            summary = run_finetune(finetune_cfg)
+            _write_json(run_dir / "metrics.json", summary)
+            log_payload = {"meta/git_branch": git_branch, "meta/git_commit": git_commit}
+            for key, value in summary.items():
+                if isinstance(value, (int, float)):
+                    log_payload[f"finetune/{key}"] = value
+            log_metrics(log_payload)
+            log_summary(log_payload)
+
+        elif task == "cache":
+            from scripts.data.cache_sam3_video import run_cache
+
+            default_manifest = REPO_ROOT / "splits" / "kitti" / "sequence_manifest.json"
+            default_kitti_root = Path(_resolve_path(runtime_cfg["paths"]["base_path"])) / "datasets" / "kitti"
+            cache_cfg = {
+                "manifest": _resolve_path(runtime_cfg["paths"].get("sequence_manifest")) or str(default_manifest),
+                "kitti_root": _resolve_path(runtime_cfg["paths"].get("kitti_root")) or str(default_kitti_root),
+                "cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
+                "checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
+                "top_k": runtime_cfg["paths"].get("sam3_top_k", 32),
+                "start_idx": runtime_cfg.get("cache", {}).get("start_idx", 0),
+            }
+            summary = run_cache(cache_cfg)
+            _write_json(run_dir / "metrics.json", summary)
+            log_payload = {
+                "meta/git_branch": git_branch,
+                "meta/git_commit": git_commit,
+                "cache/total_cached": summary.get("total_cached", 0),
+            }
+            log_metrics(log_payload)
+            log_summary(log_payload)
+
+        else:
+            raise ValueError(
+                f"Unknown task: {task!r}. Valid values: eval | eval_sam | finetune | cache"
+            )
     finally:
         finish_tracking()
 

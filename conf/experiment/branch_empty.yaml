@@ -1,18 +1,20 @@
 # @package _global_
 
 run:
-  exp_id: E1-baseline
+  exp_id: E2-branch-empty
   task: eval
 
 method:
-  idr_source: afp
+  idr_source: raw
   sam_mode: none
   query_source: online
   prompt:
-    mode: none
+    mode: empty
     classes: []
     use_bbox: false
-    strategy: no_sam
+    strategy: empty_string
 
 tags:
-  - baseline
+  - branch
+  - empty
+  - ablation

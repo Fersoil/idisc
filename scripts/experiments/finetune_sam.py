@@ -18,6 +18,7 @@ import json
 import os
 import random
 from time import time
+from typing import Any
 
 import numpy as np
 import torch
@@ -120,33 +121,42 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
     return metrics
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Fine-tune iDisc with SAM3 queries")
-    parser.add_argument("--config-file", type=str, required=True)
-    parser.add_argument("--model-file", type=str, required=True)
-    parser.add_argument("--base-path", type=str, required=True)
-    parser.add_argument("--mode", type=str, default="concat", choices=["concat", "replace"],
-                        help="concat: SAM3 IDRs + AFP; replace: SAM3 IDRs only")
-    parser.add_argument("--prompt-mode", type=str, default="multiclass",
-                        choices=["multiclass", "singleclass"],
-                        help="Text prompt strategy for online SAM3")
-    parser.add_argument("--sam-checkpoint", type=str, default=None,
-                        help="SAM3 checkpoint for online inference (F1/F2/F3)")
-    parser.add_argument("--sam3-cache-dir", type=str, default=None,
-                        help="Directory with pre-cached SAM3 video queries (F4)")
-    parser.add_argument("--output-dir", type=str, default="finetune_output")
-    parser.add_argument("--n-iters", type=int, default=5000)
-    parser.add_argument("--lr", type=float, default=5e-5)
-    parser.add_argument("--val-interval", type=int, default=500)
-    parser.add_argument("--batch-size", type=int, default=2)
-    args = parser.parse_args()
+def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
+    mode = cfg.get("mode")
+    if mode in {"concat", "replace"}:
+        return mode
 
-    if args.sam_checkpoint is None and args.sam3_cache_dir is None:
-        parser.error("Either --sam-checkpoint or --sam3-cache-dir is required")
-    use_online_sam = args.sam_checkpoint is not None
+    variant = cfg.get("variant")
+    if variant == "sam-replace":
+        return "replace"
+    if variant in {"sam-concat", "sam-cached-video", "concat", "replace"}:
+        return "concat" if variant != "replace" else "replace"
 
-    with open(args.config_file, "r") as f:
-        config = json.load(f)
+    raise ValueError(f"Cannot infer finetune mode from variant={variant!r}")
+
+
+def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
+    config = cfg.get("config")
+    if config is None:
+        with open(cfg["config_file"], "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+    sam_mode = _resolve_finetune_mode(cfg)
+    prompt_mode = cfg.get("prompt_mode", "multiclass")
+    sam_checkpoint = cfg.get("sam_checkpoint")
+    sam3_cache_dir = cfg.get("sam3_cache_dir")
+
+    if sam_checkpoint is None and sam3_cache_dir is None:
+        raise ValueError("Either sam_checkpoint or sam3_cache_dir is required")
+
+    finetune_cfg = cfg.get("finetune", {})
+    output_dir = finetune_cfg.get("output_dir", cfg.get("output_dir", "finetune_output"))
+    n_iters = int(finetune_cfg.get("n_iters", cfg.get("n_iters", 5000)))
+    lr = float(finetune_cfg.get("lr", cfg.get("lr", 5e-5)))
+    val_interval = int(finetune_cfg.get("val_interval", cfg.get("val_interval", 500)))
+    batch_size = int(finetune_cfg.get("batch_size", cfg.get("batch_size", 2)))
+
+    use_online_sam = sam_checkpoint is not None
 
     seed = config["generic"]["seed"]
     random.seed(seed)
@@ -155,21 +165,21 @@ def main():
     torch.cuda.manual_seed_all(seed)
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    os.makedirs(args.output_dir, exist_ok=True)
-    sam_mode = args.mode
+    os.makedirs(output_dir, exist_ok=True)
+
     print(f"Device: {device}", flush=True)
     print(f"Mode: {sam_mode}", flush=True)
     if use_online_sam:
-        print(f"Prompt: {args.prompt_mode}", flush=True)
+        print(f"Prompt: {prompt_mode}", flush=True)
     else:
-        print(f"Cache: {args.sam3_cache_dir}", flush=True)
+        print(f"Cache: {sam3_cache_dir}", flush=True)
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}", flush=True)
 
     # Load iDisc
     print("Loading iDisc model...", flush=True)
     model = IDisc.build(config).to(device)
-    model.load_pretrained(args.model_file)
+    model.load_pretrained(cfg["model_file"])
     print("  iDisc loaded.", flush=True)
 
     # Freeze everything except sam3_proj and ISD
@@ -185,8 +195,8 @@ def main():
     print(f"  Trainable params: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)", flush=True)
 
     # Datasets
-    cache_dir = args.sam3_cache_dir if not use_online_sam else None
-    data_path = os.path.join(args.base_path, config["data"]["data_root"])
+    cache_dir = sam3_cache_dir if not use_online_sam else None
+    data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     print(f"Loading data from {data_path}...", flush=True)
     train_dataset = getattr(custom_dataset, config["data"]["train_dataset"])(
         test_mode=False,
@@ -200,7 +210,7 @@ def main():
         sam3_cache_dir=cache_dir,
     )
     train_loader = DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
+        train_dataset, batch_size=batch_size, shuffle=True,
         num_workers=4, pin_memory=True, drop_last=True,
     )
     valid_loader = DataLoader(
@@ -216,16 +226,16 @@ def main():
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
         sam_model = build_sam3_image_model(
-            device=str(device), checkpoint_path=args.sam_checkpoint, load_from_HF=False)
+            device=str(device), checkpoint_path=sam_checkpoint, load_from_HF=False)
         sam_model.eval()
         sam_proc = Sam3Processor(sam_model, device=str(device), use_presence_score=True)
         print("  SAM3 loaded for online inference.", flush=True)
 
     # Optimizer (only trainable params)
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
+    optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=0.01)
     scheduler = OneCycleLR(
-        optimizer, max_lr=args.lr, total_steps=args.n_iters,
+        optimizer, max_lr=lr, total_steps=n_iters,
         pct_start=0.1, div_factor=10, final_div_factor=100,
     )
 
@@ -233,14 +243,14 @@ def main():
     context = torch.autocast(device_type="cuda", dtype=torch.float16, enabled=f16)
     best_abs_rel = np.inf
 
-    print(f"\nStart fine-tuning for {args.n_iters} iterations (lr={args.lr})...", flush=True)
+    print(f"\nStart fine-tuning for {n_iters} iterations (lr={lr})...", flush=True)
     start = time()
     step = 0
     model.train()
 
-    while step < args.n_iters:
+    while step < n_iters:
         for batch in train_loader:
-            if step >= args.n_iters:
+            if step >= n_iters:
                 break
 
             data = batch["image"].to(device)
@@ -256,7 +266,7 @@ def main():
                 if use_online_sam:
                     raw_img = denormalize_imagenet(data[idx])
                     with torch.no_grad():
-                        iq = extract_online_queries(sam_proc, raw_img, args.prompt_mode)
+                        iq = extract_online_queries(sam_proc, raw_img, prompt_mode)
                     if iq is not None:
                         iq = iq.to(device)
                 elif sam3_q is not None:
@@ -284,21 +294,21 @@ def main():
 
             if step % 100 == 0:
                 elapsed = int(time() - start)
-                eta = int(elapsed * (args.n_iters - step) / max(1, step))
+                eta = int(elapsed * (n_iters - step) / max(1, step))
                 lr_now = scheduler.get_last_lr()[0]
                 print(
-                    f"  Step {step}/{args.n_iters} | loss={total_loss:.5f} | "
+                    f"  Step {step}/{n_iters} | loss={total_loss:.5f} | "
                     f"lr={lr_now:.2e} | [{format_seconds(elapsed)}<{format_seconds(eta)}]",
                     flush=True,
                 )
 
-            if step % args.val_interval == 0 or step == args.n_iters:
+            if step % val_interval == 0 or step == n_iters:
                 print(f"\n  Validation at step {step}...", flush=True)
                 model.eval()
                 with torch.no_grad():
                     metrics = validate_model(model, valid_loader, context, device,
                                              sam_mode=sam_mode, sam_proc=sam_proc,
-                                             prompt_mode=args.prompt_mode if use_online_sam else None)
+                                             prompt_mode=prompt_mode if use_online_sam else None)
                 model.train()
                 for param in model.parameters():
                     param.requires_grad = False
@@ -314,19 +324,69 @@ def main():
 
                 if abs_rel < best_abs_rel:
                     best_abs_rel = abs_rel
-                    ckpt_path = os.path.join(args.output_dir, "best_sam_finetuned.pt")
+                    ckpt_path = os.path.join(output_dir, "best_sam_finetuned.pt")
                     torch.save(model.state_dict(), ckpt_path)
                     print(f"  New best! Saved to {ckpt_path}", flush=True)
 
-                ckpt_path = os.path.join(args.output_dir, f"checkpoint_step{step}.pt")
+                ckpt_path = os.path.join(output_dir, f"checkpoint_step{step}.pt")
                 torch.save(model.state_dict(), ckpt_path)
                 print(f"  Checkpoint saved to {ckpt_path}\n", flush=True)
 
     # Final save
-    final_path = os.path.join(args.output_dir, "final_sam_finetuned.pt")
+    final_path = os.path.join(output_dir, "final_sam_finetuned.pt")
     torch.save(model.state_dict(), final_path)
     print(f"\nFine-tuning complete. Final model saved to {final_path}", flush=True)
     print(f"Best abs_rel: {best_abs_rel:.6f}", flush=True)
+
+    return {
+        "best_abs_rel": float(best_abs_rel),
+        "final_checkpoint": final_path,
+        "output_dir": output_dir,
+        "mode": sam_mode,
+        "prompt_mode": prompt_mode,
+    }
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Fine-tune iDisc with SAM3 queries")
+    parser.add_argument("--config-file", type=str, required=True)
+    parser.add_argument("--model-file", type=str, required=True)
+    parser.add_argument("--base-path", type=str, required=True)
+    parser.add_argument("--mode", type=str, default="concat", choices=["concat", "replace"],
+                        help="concat: SAM3 IDRs + AFP; replace: SAM3 IDRs only")
+    parser.add_argument("--prompt-mode", type=str, default="multiclass",
+                        choices=["multiclass", "singleclass"],
+                        help="Text prompt strategy for online SAM3")
+    parser.add_argument("--sam-checkpoint", type=str, default=None,
+                        help="SAM3 checkpoint for online inference (F1/F2/F3)")
+    parser.add_argument("--sam3-cache-dir", type=str, default=None,
+                        help="Directory with pre-cached SAM3 video queries (F4)")
+    parser.add_argument("--output-dir", type=str, default="finetune_output")
+    parser.add_argument("--n-iters", type=int, default=5000)
+    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--val-interval", type=int, default=500)
+    parser.add_argument("--batch-size", type=int, default=2)
+    return parser.parse_args()
+
+
+def main():
+    args = _parse_args()
+    run_finetune(
+        {
+            "config_file": args.config_file,
+            "model_file": args.model_file,
+            "base_path": args.base_path,
+            "mode": args.mode,
+            "prompt_mode": args.prompt_mode,
+            "sam_checkpoint": args.sam_checkpoint,
+            "sam3_cache_dir": args.sam3_cache_dir,
+            "output_dir": args.output_dir,
+            "n_iters": args.n_iters,
+            "lr": args.lr,
+            "val_interval": args.val_interval,
+            "batch_size": args.batch_size,
+        }
+    )
 
 
 if __name__ == "__main__":

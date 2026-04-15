@@ -21,6 +21,7 @@ import gc
 import json
 import os
 import time
+from typing import Any
 
 import torch
 from PIL import Image
@@ -187,7 +188,42 @@ def process_sequence(predictor, seq_key, seq_info, kitti_root, cache_dir, top_k)
     return total_cached
 
 
-def main():
+def run_cache(cfg: dict[str, Any]) -> dict[str, Any]:
+    with open(cfg["manifest"], "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    os.makedirs(cfg["cache_dir"], exist_ok=True)
+
+    print("Loading SAM3 video predictor...", flush=True)
+    from sam3.model_builder import build_sam3_video_predictor
+    predictor = build_sam3_video_predictor(checkpoint_path=cfg.get("checkpoint"))
+    print("  SAM3 loaded.", flush=True)
+
+    total_cached = 0
+    seq_keys = sorted(manifest.keys())
+    start_idx = int(cfg.get("start_idx", 0))
+    top_k = int(cfg.get("top_k", 32))
+    for i, seq_key in enumerate(seq_keys):
+        if i < start_idx:
+            continue
+        seq_info = manifest[seq_key]
+        print(f"\n[{i+1}/{len(seq_keys)}] {seq_key}", flush=True)
+        n = process_sequence(
+            predictor,
+            seq_key,
+            seq_info,
+            cfg["kitti_root"],
+            cfg["cache_dir"],
+            top_k,
+        )
+        total_cached += n
+
+    print(f"\nDone. Total cached: {total_cached} frames")
+    print(f"Cache dir: {cfg['cache_dir']}")
+    return {"total_cached": int(total_cached), "cache_dir": cfg["cache_dir"]}
+
+
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cache SAM3 video features for KITTI")
     parser.add_argument("--manifest", type=str, required=True,
                         help="Path to sequence_manifest.json")
@@ -201,33 +237,21 @@ def main():
                         help="Number of queries to keep per frame")
     parser.add_argument("--start-idx", type=int, default=0,
                         help="Start from this sequence index (for resuming)")
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    with open(args.manifest) as f:
-        manifest = json.load(f)
 
-    os.makedirs(args.cache_dir, exist_ok=True)
-
-    print(f"Loading SAM3 video predictor...", flush=True)
-    from sam3.model_builder import build_sam3_video_predictor
-    predictor = build_sam3_video_predictor(checkpoint_path=args.checkpoint)
-    print(f"  SAM3 loaded.", flush=True)
-
-    total_cached = 0
-    seq_keys = sorted(manifest.keys())
-    for i, seq_key in enumerate(seq_keys):
-        if i < args.start_idx:
-            continue
-        seq_info = manifest[seq_key]
-        print(f"\n[{i+1}/{len(seq_keys)}] {seq_key}", flush=True)
-        n = process_sequence(
-            predictor, seq_key, seq_info,
-            args.kitti_root, args.cache_dir, args.top_k,
-        )
-        total_cached += n
-
-    print(f"\nDone. Total cached: {total_cached} frames")
-    print(f"Cache dir: {args.cache_dir}")
+def main():
+    args = _parse_args()
+    run_cache(
+        {
+            "manifest": args.manifest,
+            "kitti_root": args.kitti_root,
+            "cache_dir": args.cache_dir,
+            "checkpoint": args.checkpoint,
+            "top_k": args.top_k,
+            "start_idx": args.start_idx,
+        }
+    )
 
 
 if __name__ == "__main__":

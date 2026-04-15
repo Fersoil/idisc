@@ -1,8 +1,8 @@
 # @package _global_
 
 run:
-  exp_id: E1-baseline
-  task: eval
+  exp_id: D1-no-prompt
+  task: eval_sam
 
 method:
   idr_source: afp
@@ -12,7 +12,8 @@ method:
     mode: none
     classes: []
     use_bbox: false
-    strategy: no_sam
+    strategy: no_prompt
 
 tags:
-  - baseline
+  - detection
+  - none

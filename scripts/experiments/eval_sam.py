@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import time
+from typing import Any
 
 import numpy as np
 import torch
@@ -99,29 +100,32 @@ class DetectionStats:
         return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="SAM3 detection evaluation on KITTI")
-    parser.add_argument("--prompt-mode", required=True,
-                        choices=["none", "singleclass", "multiclass", "classonly"])
-    parser.add_argument("--config-file", required=True)
-    parser.add_argument("--model-file", required=True,
-                        help="iDisc model (only used to load the dataset config)")
-    parser.add_argument("--base-path", required=True)
-    parser.add_argument("--sam-checkpoint", required=True)
-    parser.add_argument("--output-dir", default="eval_results")
-    args = parser.parse_args()
+def _validate_cfg(cfg: dict[str, Any]) -> None:
+    if cfg["prompt_mode"] not in {"none", "singleclass", "multiclass", "classonly"}:
+        raise ValueError(
+            "prompt_mode must be one of: none, singleclass, multiclass, classonly"
+        )
+    if cfg.get("sam_checkpoint") is None:
+        raise ValueError("sam_checkpoint is required for eval_sam")
 
-    with open(args.config_file) as f:
-        config = json.load(f)
 
-    os.makedirs(args.output_dir, exist_ok=True)
+def run_eval_sam(cfg: dict[str, Any]) -> dict[str, Any]:
+    _validate_cfg(cfg)
+
+    config = cfg.get("config")
+    if config is None:
+        with open(cfg["config_file"], "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+    os.makedirs(cfg["output_dir"], exist_ok=True)
     device = torch.device("cuda") if tcuda.is_available() else torch.device("cpu")
 
-    print(f"Prompt mode: {args.prompt_mode}", flush=True)
+    prompt_mode = cfg["prompt_mode"]
+    print(f"Prompt mode: {prompt_mode}", flush=True)
     print(f"Device:      {device}", flush=True)
 
     # Load data (just need images, no depth)
-    data_path = os.path.join(args.base_path, config["data"]["data_root"])
+    data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
         test_mode=True, base_path=data_path, crop=config["data"]["crop"])
     valid_loader = DataLoader(valid_dataset, batch_size=1, num_workers=2,
@@ -133,9 +137,9 @@ def main():
     from sam3.model_builder import build_sam3_image_model
     from sam3.model.sam3_image_processor import Sam3Processor
 
-    use_presence = (args.prompt_mode != "classonly")
+    use_presence = (prompt_mode != "classonly")
     sam_model = build_sam3_image_model(
-        device=str(device), checkpoint_path=args.sam_checkpoint,
+        device=str(device), checkpoint_path=cfg["sam_checkpoint"],
         load_from_HF=False)
     sam_model.eval()
     proc = Sam3Processor(sam_model, device=str(device), use_presence_score=use_presence)
@@ -152,20 +156,20 @@ def main():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 state = proc.set_image(raw_img)
 
-                if args.prompt_mode == "none":
+                if prompt_mode == "none":
                     # No text prompt -- just run with dummy to get hidden states
                     proc.set_text_prompt(prompt="object", state=state)
                     stats.update(state)
 
-                elif args.prompt_mode == "multiclass":
+                elif prompt_mode == "multiclass":
                     proc.set_text_prompt(prompt=MULTI_CLASS_PROMPT, state=state)
                     stats.update(state)
 
-                elif args.prompt_mode == "classonly":
+                elif prompt_mode == "classonly":
                     proc.set_text_prompt(prompt=MULTI_CLASS_PROMPT, state=state)
                     stats.update(state)
 
-                elif args.prompt_mode == "singleclass":
+                elif prompt_mode == "singleclass":
                     for cls in KITTI_CLASSES:
                         proc.reset_all_prompts(state)
                         proc.set_text_prompt(prompt=cls, state=state)
@@ -181,17 +185,46 @@ def main():
     print(stats.report())
     print(f"{'='*50}")
 
-    out_path = os.path.join(args.output_dir, "metrics.json")
+    out_path = os.path.join(cfg["output_dir"], "metrics.json")
     result = {
-        "prompt_mode": args.prompt_mode,
+        "prompt_mode": prompt_mode,
         "n_images": len(valid_dataset),
         "elapsed_s": elapsed,
         "ms_per_image": elapsed / len(valid_dataset) * 1000,
         "detection": stats.to_dict(),
     }
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
     print(f"Saved to {out_path}")
+
+    return result
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="SAM3 detection evaluation on KITTI")
+    parser.add_argument("--prompt-mode", required=True,
+                        choices=["none", "singleclass", "multiclass", "classonly"])
+    parser.add_argument("--config-file", required=True)
+    parser.add_argument("--model-file", required=True,
+                        help="iDisc model (only used to load the dataset config)")
+    parser.add_argument("--base-path", required=True)
+    parser.add_argument("--sam-checkpoint", required=True)
+    parser.add_argument("--output-dir", default="eval_results")
+    return parser.parse_args()
+
+
+def main():
+    args = _parse_args()
+    run_eval_sam(
+        {
+            "prompt_mode": args.prompt_mode,
+            "config_file": args.config_file,
+            "model_file": args.model_file,
+            "base_path": args.base_path,
+            "sam_checkpoint": args.sam_checkpoint,
+            "output_dir": args.output_dir,
+        }
+    )
 
 
 if __name__ == "__main__":

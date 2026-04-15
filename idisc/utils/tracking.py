@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+import traceback
 
 from omegaconf import OmegaConf
 
@@ -12,7 +13,10 @@ _ACTIVE_BACKEND = "none"
 def _as_plain_dict(cfg: Any) -> dict[str, Any]:
     if isinstance(cfg, dict):
         return cfg
-    return OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    return cast(
+        dict[str, Any],
+        OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
+    )
 
 
 def init_tracking(cfg: Any, run_dir: str | Path):
@@ -84,9 +88,30 @@ def log_summary(metrics: dict[str, Any]) -> None:
         _ACTIVE_RUN.summary[key] = value
 
 
-def finish_tracking() -> None:
-    global _ACTIVE_RUN
+def log_error(error: Exception) -> None:
+    """Log exception details to W&B (traceback + metadata)."""
+    if _ACTIVE_BACKEND != "wandb" or _ACTIVE_RUN is None:
+        return
 
+    tb = traceback.format_exc()
+    _ACTIVE_RUN.log(
+        {
+            "status": "failed",
+            "error_type": type(error).__name__,
+            "error_traceback": tb,
+        }
+    )
+    _ACTIVE_RUN.summary.update(
+        {
+            "status": "failed",
+            "error_type": type(error).__name__,
+        }
+    )
+
+
+def finish_tracking(exit_code: int = 0, quiet: bool = False) -> None:
+    """Finish W&B run with status. Best practice: non-zero exit_code → "Failed"."""
+    global _ACTIVE_RUN
     if _ACTIVE_BACKEND == "wandb" and _ACTIVE_RUN is not None:
-        _ACTIVE_RUN.finish()
+        _ACTIVE_RUN.finish(exit_code=exit_code, quiet=quiet)
     _ACTIVE_RUN = None

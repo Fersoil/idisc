@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +13,9 @@ from omegaconf import DictConfig, OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
+    sys.path.append(str(REPO_ROOT))   # append, not insert — venv packages win
 from idisc.utils.config_bridge import build_runtime_config, save_resolved_config
-from idisc.utils.tracking import finish_tracking, init_tracking, log_metrics, log_summary
+from idisc.utils.tracking import finish_tracking, init_tracking, log_error, log_metrics, log_summary
 
 
 def _git_value(args: list[str], fallback: str = "unknown") -> str:
@@ -74,6 +74,21 @@ def _resolve_path(value: str | None) -> str | None:
     return str((REPO_ROOT / path).resolve())
 
 
+@contextmanager
+def tracked_run(cfg: dict[str, Any], run_dir: Path):
+    """Clean W&B context: auto-logs errors, sets status, finishes correctly."""
+    init_tracking(cfg, run_dir)
+    try:
+        yield
+    except Exception as error:
+        log_error(error)
+        finish_tracking(exit_code=1, quiet=True)
+        raise
+    else:
+        log_summary({"status": "success"})
+        finish_tracking(exit_code=0)
+
+
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -101,9 +116,7 @@ def main(cfg: DictConfig) -> None:
     _write_json(run_dir / "manifest.json", manifest)
     _write_stdout_log(run_dir / "stdout.log", manifest)
 
-    init_tracking(runtime_cfg, run_dir)
-
-    try:
+    with tracked_run(runtime_cfg, run_dir):
         task = runtime_cfg.get("run", {}).get("task", "eval")
         if task == "eval":
             from scripts.experiments.eval_depth import run_eval
@@ -120,7 +133,7 @@ def main(cfg: DictConfig) -> None:
             }
             metrics = run_eval(eval_cfg)
             _write_json(run_dir / "metrics.json", metrics)
-            log_payload = {f"eval/{k}": v for k, v in metrics.items()}
+            log_payload: dict[str, Any] = {f"eval/{k}": v for k, v in metrics.items()}
             log_payload["meta/git_branch"] = git_branch
             log_payload["meta/git_commit"] = git_commit
             log_metrics(log_payload)
@@ -140,7 +153,10 @@ def main(cfg: DictConfig) -> None:
             }
             metrics = run_eval_sam(eval_cfg)
             _write_json(run_dir / "metrics.json", metrics)
-            log_payload = {"meta/git_branch": git_branch, "meta/git_commit": git_commit}
+            log_payload: dict[str, Any] = {
+                "meta/git_branch": git_branch,
+                "meta/git_commit": git_commit,
+            }
             log_metrics(log_payload)
             log_summary(log_payload)
 
@@ -163,7 +179,10 @@ def main(cfg: DictConfig) -> None:
             }
             summary = run_finetune(finetune_cfg)
             _write_json(run_dir / "metrics.json", summary)
-            log_payload = {"meta/git_branch": git_branch, "meta/git_commit": git_commit}
+            log_payload: dict[str, Any] = {
+                "meta/git_branch": git_branch,
+                "meta/git_commit": git_commit,
+            }
             for key, value in summary.items():
                 if isinstance(value, (int, float)):
                     log_payload[f"finetune/{key}"] = value
@@ -174,7 +193,8 @@ def main(cfg: DictConfig) -> None:
             from scripts.data.cache_sam3_video import run_cache
 
             default_manifest = REPO_ROOT / "splits" / "kitti" / "sequence_manifest.json"
-            default_kitti_root = Path(_resolve_path(runtime_cfg["paths"]["base_path"])) / "datasets" / "kitti"
+            base_path = _resolve_path(runtime_cfg["paths"]["base_path"]) or str(REPO_ROOT)
+            default_kitti_root = Path(base_path) / "datasets" / "kitti"
             cache_cfg = {
                 "manifest": _resolve_path(runtime_cfg["paths"].get("sequence_manifest")) or str(default_manifest),
                 "kitti_root": _resolve_path(runtime_cfg["paths"].get("kitti_root")) or str(default_kitti_root),
@@ -197,8 +217,6 @@ def main(cfg: DictConfig) -> None:
             raise ValueError(
                 f"Unknown task: {task!r}. Valid values: eval | eval_sam | finetune | cache"
             )
-    finally:
-        finish_tracking()
 
     print("Run complete.")
     print(f"Run dir: {run_dir}")

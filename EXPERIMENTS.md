@@ -4,6 +4,22 @@
 sbatch scripts/experiments/run_experiment.sh <ID>
 ```
 
+## Hydra Wrapper
+
+For now in this ongoing refactor I just added a think hydra layer that exectues all the experiments as Mariia implemented, but instead of sbatch I use yamls.
+
+```bash
+python scripts/run_with_hydra.py experiment=baseline tracking=none
+python scripts/run_with_hydra.py experiment=baseline tracking=wandb
+python scripts/run_with_hydra.py dataset=kitti experiment=sam_branch_empty tracking=wandb
+```
+
+Notes:
+- Legacy shell flow remains available through `scripts/experiments/run_experiment.sh`.
+- Hydra owns experiment composition and tracking toggles.
+- Legacy JSON under `configs/` remains the source for model/data/training internals.
+- also added tracking with wandb
+
 ---
 
 ## 1 SAM3 Detection on KITTI

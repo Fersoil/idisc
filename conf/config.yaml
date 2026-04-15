@@ -1,0 +1,27 @@
+defaults:
+  - dataset: kitti
+  - experiment: baseline
+  - paths: cluster
+  - tracking: wandb
+  - _self_
+
+run:
+  task: eval
+  exp_id: E1-baseline
+  name: ${run.exp_id}
+
+method:
+  variant: baseline
+  use_sam: false
+  prompt_mode: multiclass
+  hidden_state_pooling: null
+  inject_into: null
+
+tags: []
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

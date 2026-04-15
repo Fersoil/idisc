@@ -4,7 +4,7 @@
     },
     "training": {
         "n_iters": 40000,
-        "batch_size": 16,
+        "batch_size": 2,
         "validation_interval": 200,
         "nsteps_accumulation_gradient": 1,
         "lr": 0.0002,

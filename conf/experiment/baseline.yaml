@@ -1,0 +1,10 @@
+run:
+  exp_id: E1-baseline
+
+method:
+  variant: baseline
+  use_sam: false
+  prompt_mode: multiclass
+
+tags:
+  - baseline

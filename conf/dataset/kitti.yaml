@@ -1,0 +1,2 @@
+dataset_name: kitti
+legacy_config_path: configs/kitti/kitti_r101.json

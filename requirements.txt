@@ -12,3 +12,6 @@ opencv-python
 einops
 matplotlib
 timm
+wandb
+hydra-core
+omegaconf

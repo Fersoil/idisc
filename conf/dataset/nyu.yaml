@@ -1,0 +1,2 @@
+dataset_name: nyu
+legacy_config_path: configs/nyu/nyu_r101.json

@@ -1,0 +1,5 @@
+base_path: .
+pretrained_model: models/kitti_resnet101.pt
+sam_checkpoint: null
+sam3_cache_dir: null
+outputs_root: outputs/runs

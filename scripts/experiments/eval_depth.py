@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import time
+from typing import Any
 
 import numpy as np
 import torch
@@ -113,32 +114,26 @@ def get_sam_queries_proj(processor, raw_img, prompt_mode):
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(description="Depth evaluation")
-    parser.add_argument("--variant", required=True,
-                        choices=["baseline", "branch", "sam-replace", "sam-concat", "sam-cached-video"])
-    parser.add_argument("--prompt-mode", default="multiclass",
-                        choices=["empty", "multiclass", "singleclass", "classonly"])
-    parser.add_argument("--config-file", required=True)
-    parser.add_argument("--model-file", required=True)
-    parser.add_argument("--base-path", required=True)
-    parser.add_argument("--sam-checkpoint", default=None)
-    parser.add_argument("--sam3-cache-dir", default=None)
-    parser.add_argument("--output-dir", default="eval_results")
-    args = parser.parse_args()
+def _validate_eval_args(cfg: dict[str, Any]) -> None:
+    variant = cfg["variant"]
+    if variant in ("branch", "sam-replace", "sam-concat") and cfg.get("sam_checkpoint") is None:
+        raise ValueError(f"sam_checkpoint is required for variant '{variant}'")
+    if variant == "sam-cached-video" and cfg.get("sam3_cache_dir") is None:
+        raise ValueError("sam3_cache_dir is required for variant 'sam-cached-video'")
 
-    variant = args.variant
-    prompt_mode = args.prompt_mode
 
-    if variant in ("branch", "sam-replace", "sam-concat") and args.sam_checkpoint is None:
-        parser.error(f"--sam-checkpoint required for variant '{variant}'")
-    if variant == "sam-cached-video" and args.sam3_cache_dir is None:
-        parser.error("--sam3-cache-dir required for variant 'sam-cached-video'")
+def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
+    variant = cfg["variant"]
+    prompt_mode = cfg.get("prompt_mode", "multiclass")
 
-    with open(args.config_file) as f:
-        config = json.load(f)
+    _validate_eval_args(cfg)
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    config = cfg.get("config")
+    if config is None:
+        with open(cfg["config_file"], "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+    os.makedirs(cfg["output_dir"], exist_ok=True)
     device = torch.device("cuda") if tcuda.is_available() else torch.device("cpu")
 
     print(f"Variant:    {variant}", flush=True)
@@ -149,14 +144,14 @@ def main():
 
     # Load iDisc
     model = IDisc.build(config)
-    model.load_pretrained(args.model_file)
+    model.load_pretrained(cfg["model_file"])
     model = model.to(device)
     model.eval()
     print("iDisc loaded.", flush=True)
 
     # Load data
-    cache_dir = args.sam3_cache_dir if variant == "sam-cached-video" else None
-    data_path = os.path.join(args.base_path, config["data"]["data_root"])
+    cache_dir = cfg.get("sam3_cache_dir") if variant == "sam-cached-video" else None
+    data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
         test_mode=True, base_path=data_path, crop=config["data"]["crop"],
         sam3_cache_dir=cache_dir)
@@ -175,8 +170,8 @@ def main():
         from sam3.model.sam3_image_processor import Sam3Processor
         use_presence = (prompt_mode != "classonly")
         sam_model = build_sam3_image_model(
-            device=str(device), checkpoint_path=args.sam_checkpoint,
-            load_from_HF=(args.sam_checkpoint is None))
+            device=str(device), checkpoint_path=cfg.get("sam_checkpoint"),
+            load_from_HF=(cfg.get("sam_checkpoint") is None))
         sam_model.eval()
         sam_proc = Sam3Processor(sam_model, device=str(device), use_presence_score=use_presence)
         print("SAM3 loaded.", flush=True)
@@ -249,11 +244,42 @@ def main():
         print(f"  {k:<12} {v:.6f}")
     print(f"{'='*40}")
 
-    out_path = os.path.join(args.output_dir, "metrics.json")
+    out_path = os.path.join(cfg["output_dir"], "metrics.json")
     with open(out_path, "w") as f:
         json.dump({"variant": variant, "prompt_mode": prompt_mode, "metrics": metrics,
                     "elapsed_s": elapsed}, f, indent=2)
     print(f"Saved to {out_path}")
+
+    return metrics
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Depth evaluation")
+    parser.add_argument("--variant", required=True,
+                        choices=["baseline", "branch", "sam-replace", "sam-concat", "sam-cached-video"])
+    parser.add_argument("--prompt-mode", default="multiclass",
+                        choices=["empty", "multiclass", "singleclass", "classonly"])
+    parser.add_argument("--config-file", required=True)
+    parser.add_argument("--model-file", required=True)
+    parser.add_argument("--base-path", required=True)
+    parser.add_argument("--sam-checkpoint", default=None)
+    parser.add_argument("--sam3-cache-dir", default=None)
+    parser.add_argument("--output-dir", default="eval_results")
+    return parser.parse_args()
+
+
+def main():
+    args = _parse_args()
+    run_eval({
+        "variant": args.variant,
+        "prompt_mode": args.prompt_mode,
+        "config_file": args.config_file,
+        "model_file": args.model_file,
+        "base_path": args.base_path,
+        "sam_checkpoint": args.sam_checkpoint,
+        "sam3_cache_dir": args.sam3_cache_dir,
+        "output_dir": args.output_dir,
+    })
 
 
 if __name__ == "__main__":

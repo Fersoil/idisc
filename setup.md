@@ -81,6 +81,53 @@ python scripts/test.py --model-file $CHECKPOINTS_PATH/nyu_resnet101.pt \
   --base-path $BASE_PATH
 ```
 
+### 6. Install SAM3
+
+All of our current experiments use SAM3 module. SAM3 lies under `sam3/` and must be installed as a regular package.
+
+```bash
+source .venv/bin/activate
+# install if not installed previously
+pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu128
+
+pip install -e ".[notebooks]"
+```
+
+Now, we want to download the SAM3 checkpoint to scratch:
+
+```bash
+# auth to huggingface
+hf auth login
+
+python3 << 'EOF'
+from huggingface_hub import snapshot_download
+import os
+snapshot_download(repo_id='facebook/sam3', local_dir=f'/work/scratch/{os.getenv("USER")}/sam3_checkpoints')
+EOF
+```
+
+
+Finally, install the `sam3/` module.
+
+```bash
+pip install sam3/
+```
+
+### 7. Run the experiments!
+
+Just run 
+```bash
+python scripts/run_with_hydra.py 
+```
+
+If you need some help, just type:
+```bash
+python scripts/run_with_hydra.py  --help
+```
+
+
+For a detailed description on how to run the experiments please refer to [experiments description](./EXPERIMENTS.md).
+
 ### Notes
 
 
@@ -90,9 +137,18 @@ Remember to use cuda version supported by Blackwell GPU used in student cluster,
 
 
 You might also need to adjust the source paths for you dataset. 
-TODO: set up the environments for compute.
 
-## Experimental setup for Euler
+
+For faster inference you might want to install:
+```bash
+pip install einops ninja && pip install flash-attn-3 --no-deps --index-url https://download.pytorch.org/whl/cu128
+pip install git+https://github.com/ronghanghu/cc_torch.git
+```
+
+
+
+
+## Experimental setup for Euler (deprecated)
 
 Based on https://docs.hpc.ethz.ch/software/proglang/python/ the recommended
 approach is to use the Euler module system for Python + CUDA (matched toolchain)

@@ -72,6 +72,27 @@ def _write_stdout_log(path: Path, manifest: dict[str, Any]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _flatten_dict(payload: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Flatten nested dictionaries into slash-delimited summary keys."""
+    flat: dict[str, Any] = {}
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                next_path = f"{path}/{key}" if path else str(key)
+                _walk(value, next_path)
+            return
+        flat[f"{prefix}/{path}"] = node
+
+    _walk(payload, "")
+    return flat
+
+
 def _resolve_path(value: str | None) -> str | None:
     if value is None:
         return None
@@ -139,12 +160,33 @@ def main(cfg: DictConfig) -> None:
                 "config": runtime_cfg,
             }
             metrics = run_eval(eval_cfg)
-            _write_json(run_dir / "metrics.json", metrics)
+            metrics_path = run_dir / "metrics.json"
+            if metrics_path.exists():
+                metrics_payload = _read_json(metrics_path)
+            else:
+                metrics_payload = {
+                    "variant": runtime_cfg["variant"],
+                    "prompt_mode": runtime_cfg.get("prompt_mode", "multiclass"),
+                    "metrics": metrics,
+                }
+                _write_json(metrics_path, metrics_payload)
+
             log_payload: dict[str, Any] = {f"eval/{k}": v for k, v in metrics.items()}
             log_payload["meta/git_branch"] = git_branch
             log_payload["meta/git_commit"] = git_commit
             log_metrics(log_payload)
-            log_summary(log_payload)
+
+            summary_payload: dict[str, Any] = {
+                "eval/variant": metrics_payload.get("variant"),
+                "eval/prompt_mode": metrics_payload.get("prompt_mode"),
+                "eval/elapsed_s": metrics_payload.get("elapsed_s"),
+            }
+            for key, value in metrics_payload.get("metrics", {}).items():
+                summary_payload[f"eval/metrics/{key}"] = value
+            summary_payload["meta/git_branch"] = git_branch
+            summary_payload["meta/git_commit"] = git_commit
+            log_summary(summary_payload)
+
             log_artifact(
                 run_dir,
                 name=f"{exp_id}-run-output",
@@ -165,13 +207,24 @@ def main(cfg: DictConfig) -> None:
                 "config": runtime_cfg,
             }
             metrics = run_eval_sam(eval_cfg)
-            _write_json(run_dir / "metrics.json", metrics)
+            metrics_path = run_dir / "metrics.json"
+            if metrics_path.exists():
+                metrics_payload = _read_json(metrics_path)
+            else:
+                metrics_payload = metrics
+                _write_json(metrics_path, metrics_payload)
+
             log_payload: dict[str, Any] = {
                 "meta/git_branch": git_branch,
                 "meta/git_commit": git_commit,
             }
             log_metrics(log_payload)
-            log_summary(log_payload)
+
+            summary_payload: dict[str, Any] = _flatten_dict(metrics_payload, "eval_sam")
+            summary_payload["meta/git_branch"] = git_branch
+            summary_payload["meta/git_commit"] = git_commit
+            log_summary(summary_payload)
+
             log_artifact(
                 run_dir,
                 name=f"{exp_id}-run-output",

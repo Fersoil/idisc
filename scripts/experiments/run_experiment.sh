@@ -8,7 +8,8 @@
 #   sbatch scripts/experiments/run_experiment.sh <EXPERIMENT_ID>
 #   sbatch scripts/experiments/run_experiment.sh --all
 #
-# Results: eval_results/<ID>/metrics.json
+# Every experiment in EXPERIMENTS.md maps to an ID here.
+# Results: results/<ID>/metrics.json
 # Logs:    logs/iDisc-exp_<JOB>.out
 #
 #SBATCH --job-name=iDisc-exp
@@ -31,6 +32,8 @@ MANIFEST="$IDISC_REPO/splits/kitti/sequence_manifest.json"
 KITTI_ROOT="/work/courses/3dv/team17/idisc/datasets/kitti"
 FINETUNE_CKPT="$IDISC_REPO/finetune_output/kitti-best.pt"
 
+EXP_ID="${1:?Usage: sbatch scripts/experiments/run_experiment.sh <EXPERIMENT_ID>}"
+OUTPUT_DIR="$IDISC_REPO/results/$EXP_ID"
 EVAL_SAM="scripts/experiments/eval_sam.py"
 EVAL_DEPTH="scripts/experiments/eval_depth.py"
 FTUNE="scripts/experiments/finetune_sam.py"
@@ -81,133 +84,190 @@ export PYTHONPATH="$IDISC_REPO:$IDISC_REPO/sam3:${PYTHONPATH:-}"
 mkdir -p "$IDISC_REPO/logs"
 cd "$IDISC_REPO"
 
-run_one() {
-  local EXP_ID="$1"
-  local OUTPUT_DIR="$IDISC_REPO/eval_results/$EXP_ID"
+# ── dispatch ──
+case "$EXP_ID" in
 
-  echo "═══════════════════════════════════════════"
-  echo " Experiment: $EXP_ID"
-  echo " Job:        ${SLURM_JOB_ID:-N/A}"
-  echo " Node:       ${SLURM_NODELIST:-N/A}"
-  echo " Branch:     $(git -C "$IDISC_REPO" branch --show-current)"
-  echo " Commit:     $(git -C "$IDISC_REPO" rev-parse --short HEAD)"
-  echo " Started:    $(date)"
-  echo "═══════════════════════════════════════════"
+  # ════════════════════════════════════════════
+  # Section 1: SAM3 detection only (no depth)
+  # ════════════════════════════════════════════
 
-  mkdir -p "$OUTPUT_DIR" "$IDISC_REPO/logs"
+  D1-no-prompt)
+    python -u "$EVAL_SAM" --prompt-mode none \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-  case "$EXP_ID" in
-    D1-no-prompt)
-      python -u "$EVAL_SAM" --prompt-mode none \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  D2-singleclass)
+    python -u "$EVAL_SAM" --prompt-mode singleclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    D2-singleclass)
-      python -u "$EVAL_SAM" --prompt-mode singleclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  D3-multiclass)
+    python -u "$EVAL_SAM" --prompt-mode multiclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    D3-multiclass)
-      python -u "$EVAL_SAM" --prompt-mode multiclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  D4-classonly)
+    python -u "$EVAL_SAM" --prompt-mode classonly \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    D4-classonly)
-      python -u "$EVAL_SAM" --prompt-mode classonly \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  # ════════════════════════════════════════════
+  # Section 2: SAM3 + iDisc depth (no training)
+  # ════════════════════════════════════════════
 
-    E1-baseline)
-      python -u "$EVAL_DEPTH" --variant baseline \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR"
-      ;;
+  E1-baseline)
+    python -u "$EVAL_DEPTH" --variant baseline \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR"
+    ;;
 
-    E2-branch-empty)
-      python -u "$EVAL_DEPTH" --variant branch --prompt-mode empty \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  # -- Legacy s-seq (avg_pool2d, reproducing old branch bugs) --
 
-    E3-branch-multiclass)
-      python -u "$EVAL_DEPTH" --variant branch --prompt-mode multiclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  E2-branch-empty)
+    python -u "$EVAL_DEPTH" --variant branch --prompt-mode empty \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    E4-branch-singleclass)
-      python -u "$EVAL_DEPTH" --variant branch --prompt-mode singleclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  E3-branch-multiclass)
+    python -u "$EVAL_DEPTH" --variant branch --prompt-mode multiclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    E5-replace-multiclass)
-      python -u "$EVAL_DEPTH" --variant sam-replace --prompt-mode multiclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  E4-branch-singleclass)
+    python -u "$EVAL_DEPTH" --variant branch --prompt-mode singleclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    E6-replace-singleclass)
-      python -u "$EVAL_DEPTH" --variant sam-replace --prompt-mode singleclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  # -- Replace AFP with linear projection --
 
-    E7-concat-multiclass)
-      python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode multiclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  E5-replace-multiclass)
+    python -u "$EVAL_DEPTH" --variant sam-replace --prompt-mode multiclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    E8-concat-singleclass)
-      python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode singleclass \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  E6-replace-singleclass)
+    python -u "$EVAL_DEPTH" --variant sam-replace --prompt-mode singleclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    E9-concat-classonly)
-      python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode classonly \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
-      ;;
+  # -- Concat with AFP (linear proj + AFP preserved) --
 
-    E10-concat-video)
-      python -u "$EVAL_DEPTH" --variant sam-cached-video \
-        --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
-        --output-dir "$OUTPUT_DIR" --sam3-cache-dir "$SAM3_CACHE"
-      ;;
-      
+  E7-concat-multiclass)
+    python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode multiclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
+  E8-concat-singleclass)
+    python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode singleclass \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
+  E9-concat-classonly)
+    python -u "$EVAL_DEPTH" --variant sam-concat --prompt-mode classonly \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
+    ;;
 
-    *)
-      echo "ERROR: Unknown experiment ID '$EXP_ID'"
-      usage
-      exit 1
-      ;;
-  esac
+  E10-concat-video)
+    python -u "$EVAL_DEPTH" --variant sam-cached-video \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam3-cache-dir "$SAM3_CACHE"
+    ;;
 
-  echo ""
-  echo "═══════════════════════════════════════════"
-  echo " Finished experiment: $EXP_ID"
-  echo " Finished at:         $(date)"
-  echo "═══════════════════════════════════════════"
-  echo ""
-}
+  # ════════════════════════════════════════════
+  # Fine-tuning
+  # ════════════════════════════════════════════
 
-if [[ $# -ne 1 ]]; then
-  usage
-  exit 1
-fi
+  F1-replace-multiclass)
+    python -u $FTUNE \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$IDISC_REPO/finetune_output/$EXP_ID" \
+      --mode replace --prompt-mode multiclass \
+      --sam-checkpoint "$SAM_CKPT" \
+      --n-iters 5000 --lr 5e-5 --val-interval 500 --batch-size 2
+    ;;
 
-if [[ "$1" == "--all" ]]; then
-  for exp in "${ALL_EXPERIMENTS[@]}"; do
-    run_one "$exp"
-  done
-else
-  run_one "$1"
-fi
+  F2-replace-singleclass)
+    python -u $FTUNE \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$IDISC_REPO/finetune_output/$EXP_ID" \
+      --mode replace --prompt-mode singleclass \
+      --sam-checkpoint "$SAM_CKPT" \
+      --n-iters 5000 --lr 5e-5 --val-interval 500 --batch-size 2
+    ;;
+
+  F3-concat-singleclass)
+    python -u $FTUNE \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$IDISC_REPO/finetune_output/$EXP_ID" \
+      --mode concat --prompt-mode singleclass \
+      --sam-checkpoint "$SAM_CKPT" \
+      --n-iters 5000 --lr 5e-5 --val-interval 500 --batch-size 2
+    ;;
+
+  F4-concat-video)
+    python -u $FTUNE \
+      --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
+      --output-dir "$IDISC_REPO/finetune_output/$EXP_ID" \
+      --mode concat \
+      --sam3-cache-dir "$SAM3_CACHE" \
+      --n-iters 5000 --lr 5e-5 --val-interval 500 --batch-size 2
+    ;;
+
+  # ════════════════════════════════════════════
+  # Eval fine-tuned models
+  # ════════════════════════════════════════════
+
+  E1-ft-baseline)
+    python -u "$EVAL_DEPTH" --variant baseline \
+      --config-file "$CFG" --model-file "$FINETUNE_CKPT" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR"
+    ;;
+
+  E10-ft-video)
+    python -u "$EVAL_DEPTH" --variant sam-cached-video \
+      --config-file "$CFG" --model-file "$FINETUNE_CKPT" --base-path "$BASE_PATH" \
+      --output-dir "$OUTPUT_DIR" --sam3-cache-dir "$SAM3_CACHE"
+    ;;
+
+  # ════════════════════════════════════════════
+  # Cache
+  # ════════════════════════════════════════════
+
+  C1-cache-video)
+    python -u scripts/data/cache_sam3_video.py \
+      --manifest "$MANIFEST" --kitti-root "$KITTI_ROOT" \
+      --cache-dir "$SAM3_CACHE" --checkpoint "$SAM_CKPT" --top-k 200
+    ;;
+
+  *)
+    echo "ERROR: Unknown experiment ID '$EXP_ID'"
+    echo ""
+    echo "Valid IDs:"
+    echo "  Detection:  D1-no-prompt  D2-singleclass  D3-multiclass  D4-classonly"
+    echo "  Eval:       E1-baseline"
+    echo "    Branch:   E2-branch-empty  E3-branch-multiclass  E4-branch-singleclass"
+    echo "    Replace:  E5-replace-multiclass  E6-replace-singleclass"
+    echo "    Concat:   E7-concat-multiclass  E8-concat-singleclass  E9-concat-classonly  E10-concat-video"
+    echo "  Finetune:   F1-replace-multiclass  F2-replace-singleclass  F3-concat-singleclass  F4-concat-video"
+    echo "  Eval FT:    E1-ft-baseline  E10-ft-video"
+    echo "  Cache:      C1-cache-video"
+    exit 1
+    ;;
+esac
+
+echo ""
+echo "═══════════════════════════════════════════"
+echo " Finished: $(date)"
+echo "═══════════════════════════════════════════"

@@ -108,6 +108,17 @@ def _validate_cfg(cfg: dict[str, Any]) -> None:
     if cfg.get("sam_checkpoint") is None:
         raise ValueError("sam_checkpoint is required for eval_sam")
 
+def main():
+    parser = argparse.ArgumentParser(description="SAM3 detection evaluation on KITTI")
+    parser.add_argument("--prompt-mode", required=True,
+                        choices=["none", "singleclass", "multiclass", "classonly"])
+    parser.add_argument("--config-file", required=True)
+    parser.add_argument("--model-file", required=True,
+                        help="iDisc model (only used to load the dataset config)")
+    parser.add_argument("--base-path", required=True)
+    parser.add_argument("--sam-checkpoint", required=True)
+    parser.add_argument("--output-dir", default="results")
+    args = parser.parse_args()
 
 def run_eval_sam(cfg: dict[str, Any]) -> dict[str, Any]:
     _validate_cfg(cfg)

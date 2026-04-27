@@ -1,0 +1,19 @@
+# @package _global_
+
+run:
+  exp_id: E6-replace-singleclass
+  task: eval
+
+method:
+  idr_source: afp
+  sam_mode: replace
+  query_source: online
+  prompt:
+    mode: singleclass
+    classes: [car, truck, person, bicycle, motorcycle, bus, train]
+    use_bbox: true
+    strategy: top1_by_confidence
+
+tags:
+  - replace
+  - singleclass

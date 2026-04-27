@@ -1,0 +1,19 @@
+# @package _global_
+
+run:
+  exp_id: E3-pooled-multiclass
+  task: eval
+
+method:
+  idr_source: raw
+  sam_mode: none
+  query_source: online
+  prompt:
+    mode: multiclass
+    classes: [car, truck, person, bicycle, motorcycle, bus, train]
+    use_bbox: true
+    strategy: all_classes_topk_merge
+
+tags:
+  - pooled
+  - multiclass

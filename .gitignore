@@ -44,3 +44,7 @@ lightning_logs/
 
 datasets/
 logs/
+
+# hydra
+outputs/
+results/

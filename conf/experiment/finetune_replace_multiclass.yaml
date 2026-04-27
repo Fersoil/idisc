@@ -1,0 +1,20 @@
+# @package _global_
+
+run:
+  exp_id: F1-replace-multiclass
+  task: finetune
+
+method:
+  idr_source: afp
+  sam_mode: replace
+  query_source: online
+  prompt:
+    mode: multiclass
+    classes: [car, truck, person, bicycle, motorcycle, bus, train]
+    use_bbox: true
+    strategy: all_classes_topk_merge
+
+tags:
+  - finetune
+  - replace
+  - multiclass

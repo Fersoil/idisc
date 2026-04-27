@@ -1,0 +1,7 @@
+enabled: true
+backend: wandb
+project: idisc-sam3
+entity: null
+mode: online
+tags: []
+log_code: false

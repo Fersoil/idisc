@@ -1,0 +1,31 @@
+defaults:
+  - dataset: kitti
+  - _self_
+  - experiment: baseline
+  - paths: cluster
+  - tracking: none
+  - finetune: default
+
+run:
+  task: eval
+  exp_id: E1-baseline
+  name: ${run.exp_id}
+
+method:
+  idr_source: afp
+  sam_mode: none
+  query_source: online
+  prompt:
+    mode: none
+    classes: []
+    use_bbox: false
+    strategy: none
+
+tags: []
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

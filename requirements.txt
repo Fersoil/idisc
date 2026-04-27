@@ -8,7 +8,16 @@ setuptools
 tqdm
 wheel
 scipy
-opencv-python
+
+# SAM3 issues
+opencv-python>=4.8,<4.10
+numpy>=1.26,<2
+pycocotools
+psutil
+
 einops
 matplotlib
 timm
+wandb
+hydra-core
+omegaconf

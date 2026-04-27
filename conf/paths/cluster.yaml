@@ -1,0 +1,8 @@
+base_path: /work/courses/3dv/team17/idisc
+pretrained_model: /work/courses/3dv/team17/models/kitti_resnet101.pt
+sam_checkpoint: /work/courses/3dv/team17/sam3_checkpoints/sam3.pt
+sam3_cache_dir: /work/courses/3dv/team17/sam3_cache
+kitti_root: /work/courses/3dv/team17/idisc/datasets/kitti
+sequence_manifest: splits/kitti/sequence_manifest.json
+sam3_top_k: 32
+outputs_root: outputs/runs

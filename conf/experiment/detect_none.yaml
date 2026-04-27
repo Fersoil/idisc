@@ -1,0 +1,19 @@
+# @package _global_
+
+run:
+  exp_id: D1-no-prompt
+  task: eval_sam
+
+method:
+  idr_source: afp
+  sam_mode: none
+  query_source: online
+  prompt:
+    mode: none
+    classes: []
+    use_bbox: false
+    strategy: no_prompt
+
+tags:
+  - detection
+  - none

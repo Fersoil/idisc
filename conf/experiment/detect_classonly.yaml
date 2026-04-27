@@ -1,0 +1,19 @@
+# @package _global_
+
+run:
+  exp_id: D4-classonly
+  task: eval_sam
+
+method:
+  idr_source: afp
+  sam_mode: none
+  query_source: online
+  prompt:
+    mode: classonly
+    classes: [car, truck, person, bicycle, motorcycle, bus, train]
+    use_bbox: false
+    strategy: class_labels_only
+
+tags:
+  - detection
+  - classonly

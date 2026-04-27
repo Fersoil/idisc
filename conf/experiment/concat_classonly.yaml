@@ -1,0 +1,19 @@
+# @package _global_
+
+run:
+  exp_id: E9-concat-classonly
+  task: eval
+
+method:
+  idr_source: afp
+  sam_mode: concat
+  query_source: online
+  prompt:
+    mode: classonly
+    classes: [car, truck, person, bicycle, motorcycle, bus, train]
+    use_bbox: false
+    strategy: class_labels_only
+
+tags:
+  - concat
+  - classonly

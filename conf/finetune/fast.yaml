@@ -1,0 +1,5 @@
+n_iters: 500
+lr: 5.0e-5
+batch_size: 2
+val_interval: 50
+output_dir: finetune_output/${run.exp_id}_fast

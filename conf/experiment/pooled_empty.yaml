@@ -1,0 +1,20 @@
+# @package _global_
+
+run:
+  exp_id: E2-pooled-empty
+  task: eval
+
+method:
+  idr_source: raw
+  sam_mode: none
+  query_source: online
+  prompt:
+    mode: empty
+    classes: []
+    use_bbox: false
+    strategy: empty_string
+
+tags:
+  - pooled
+  - empty
+  - ablation

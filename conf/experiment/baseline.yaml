@@ -1,0 +1,18 @@
+# @package _global_
+
+run:
+  exp_id: E1-baseline
+  task: eval
+
+method:
+  idr_source: afp
+  sam_mode: none
+  query_source: online
+  prompt:
+    mode: none
+    classes: []
+    use_bbox: false
+    strategy: no_sam
+
+tags:
+  - baseline

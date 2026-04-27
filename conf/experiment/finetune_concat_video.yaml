@@ -1,0 +1,21 @@
+# @package _global_
+
+run:
+  exp_id: F4-concat-video
+  task: finetune
+
+method:
+  idr_source: afp
+  sam_mode: concat
+  query_source: cached
+  prompt:
+    mode: video
+    classes: [car, truck, person, bicycle, motorcycle, bus, train]
+    use_bbox: true
+    strategy: cached_queries
+
+tags:
+  - finetune
+  - concat
+  - video
+  - needs-cache

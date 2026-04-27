@@ -120,6 +120,19 @@ def _validate_eval_args(cfg: dict[str, Any]) -> None:
         raise ValueError(f"sam_checkpoint is required for variant '{variant}'")
     if variant == "sam-cached-video" and cfg.get("sam3_cache_dir") is None:
         raise ValueError("sam3_cache_dir is required for variant 'sam-cached-video'")
+def main():
+    parser = argparse.ArgumentParser(description="Depth evaluation")
+    parser.add_argument("--variant", required=True,
+                        choices=["baseline", "branch", "sam-replace", "sam-concat", "sam-cached-video"])
+    parser.add_argument("--prompt-mode", default="multiclass",
+                        choices=["empty", "multiclass", "singleclass", "classonly"])
+    parser.add_argument("--config-file", required=True)
+    parser.add_argument("--model-file", required=True)
+    parser.add_argument("--base-path", required=True)
+    parser.add_argument("--sam-checkpoint", default=None)
+    parser.add_argument("--sam3-cache-dir", default=None)
+    parser.add_argument("--output-dir", default="results")
+    args = parser.parse_args()
 
 
 def run_eval(cfg: dict[str, Any]) -> dict[str, float]:

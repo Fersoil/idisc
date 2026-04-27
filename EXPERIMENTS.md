@@ -114,3 +114,24 @@ The run directory includes the resolved config, manifest, logs, and metrics.
 ## Notes
 
 The code still bridges to the legacy JSON configs for dataset/model setup, but Hydra is the main interface now. In the future, we may move fully to Hydra and remove the legacy JSONs entirely.
+## Files
+
+| Path | What |
+|------|------|
+| `scripts/experiments/run_experiment.sh` | SLURM dispatcher |
+| `scripts/experiments/eval_depth.py` | depth eval (E exps) |
+| `scripts/experiments/eval_sam.py` | detection eval (D exps) |
+| `scripts/experiments/finetune_sam.py` | fine-tune sam3_proj+ISD (F exps) |
+| `scripts/data/cache_sam3_video.py` | cache video queries (C1) |
+| `idisc/models/idisc.py` | main model, forward() w/ instance_queries, sam_mode |
+| `idisc/models/id_module.py` | AFP + ISD |
+| `idisc/dataloders/kitti.py` | dataloader w/ sam3_cache_dir |
+
+## Changes from original iDisc
+
+1. sam3_proj = 3 x Linear(256->128) to project SAM3 queries into IDR space
+2. forward() accepts instance_queries + raw_idrs + sam_mode for replace/concat/branch
+3. KITTIDataset: sam3_cache_dir + sam3_top_k, loads .pt files, picks top-K by L2 norm
+4. Sam3Processor: exposed instance_queries + topk_scores
+5. Added denormalization before SAM3 (was double-normalizing w/ ImageNet stats)
+6. Replaced avg_pool2d from s-seq branch w/ linear projection

@@ -13,7 +13,7 @@ CFG="configs/kitti/kitti_r101.json"
 MODEL="/work/courses/3dv/team17/models/kitti_resnet101.pt"
 SAM_CKPT="/work/courses/3dv/team17/sam3_checkpoints/sam3.pt"
 SAM3_CACHE="/work/courses/3dv/team17/sam3_cache"
-OUTPUT_DIR="$IDISC_REPO/eval_results"
+OUTPUT_DIR="$IDISC_REPO/results"
 
 # ── environment
 . /etc/profile.d/modules.sh

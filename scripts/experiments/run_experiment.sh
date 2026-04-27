@@ -45,9 +45,9 @@ ALL_EXPERIMENTS=(
   D3-multiclass
   D4-classonly
   E1-baseline
-  E2-branch-empty
-  E3-branch-multiclass
-  E4-branch-singleclass
+  E2-pooled-empty
+  E3-pooled-multiclass
+  E4-pooled-singleclass
   E5-replace-multiclass
   E6-replace-singleclass
   E7-concat-multiclass
@@ -65,7 +65,7 @@ Usage:
 Valid IDs:
   Detection:  D1-no-prompt  D2-singleclass  D3-multiclass  D4-classonly
   Eval:       E1-baseline
-    Branch:   E2-branch-empty  E3-branch-multiclass  E4-branch-singleclass
+    Pooled:   E2-pooled-empty  E3-pooled-multiclass  E4-pooled-singleclass
     Replace:  E5-replace-multiclass  E6-replace-singleclass
     Concat:   E7-concat-multiclass  E8-concat-singleclass  E9-concat-classonly  E10-concat-video
   Finetune:   F1-replace-multiclass  F2-replace-singleclass  F3-concat-singleclass  F4-concat-video
@@ -125,22 +125,22 @@ case "$EXP_ID" in
       --output-dir "$OUTPUT_DIR"
     ;;
 
-  # -- Legacy s-seq (avg_pool2d, reproducing old branch bugs) --
+  # -- Pooled: avg_pool2d on raw encoder hidden states; SAM3 runs but doesn't affect depth --
 
-  E2-branch-empty)
-    python -u "$EVAL_DEPTH" --variant branch --prompt-mode empty \
+  E2-pooled-empty)
+    python -u "$EVAL_DEPTH" --variant pooled --prompt-mode empty \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
       --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
-  E3-branch-multiclass)
-    python -u "$EVAL_DEPTH" --variant branch --prompt-mode multiclass \
+  E3-pooled-multiclass)
+    python -u "$EVAL_DEPTH" --variant pooled --prompt-mode multiclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
       --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
 
-  E4-branch-singleclass)
-    python -u "$EVAL_DEPTH" --variant branch --prompt-mode singleclass \
+  E4-pooled-singleclass)
+    python -u "$EVAL_DEPTH" --variant pooled --prompt-mode singleclass \
       --config-file "$CFG" --model-file "$PRETRAINED" --base-path "$BASE_PATH" \
       --output-dir "$OUTPUT_DIR" --sam-checkpoint "$SAM_CKPT"
     ;;
@@ -257,7 +257,7 @@ case "$EXP_ID" in
     echo "Valid IDs:"
     echo "  Detection:  D1-no-prompt  D2-singleclass  D3-multiclass  D4-classonly"
     echo "  Eval:       E1-baseline"
-    echo "    Branch:   E2-branch-empty  E3-branch-multiclass  E4-branch-singleclass"
+    echo "    Pooled:   E2-pooled-empty  E3-pooled-multiclass  E4-pooled-singleclass"
     echo "    Replace:  E5-replace-multiclass  E6-replace-singleclass"
     echo "    Concat:   E7-concat-multiclass  E8-concat-singleclass  E9-concat-classonly  E10-concat-video"
     echo "  Finetune:   F1-replace-multiclass  F2-replace-singleclass  F3-concat-singleclass  F4-concat-video"

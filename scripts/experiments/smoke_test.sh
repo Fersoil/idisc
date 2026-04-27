@@ -29,9 +29,9 @@ EXPERIMENTS=(
   # Depth eval (eval task) — no SAM required
   baseline
   # Depth eval — online SAM (requires sam_checkpoint)
-  branch_empty
-  branch_multiclass
-  branch_singleclass
+  pooled_empty
+  pooled_multiclass
+  pooled_singleclass
   replace_multiclass
   replace_singleclass
   concat_multiclass

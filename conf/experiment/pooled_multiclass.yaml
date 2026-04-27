@@ -1,7 +1,7 @@
 # @package _global_
 
 run:
-  exp_id: E4-branch-singleclass
+  exp_id: E3-pooled-multiclass
   task: eval
 
 method:
@@ -9,11 +9,11 @@ method:
   sam_mode: none
   query_source: online
   prompt:
-    mode: singleclass
+    mode: multiclass
     classes: [car, truck, person, bicycle, motorcycle, bus, train]
     use_bbox: true
-    strategy: top1_by_confidence
+    strategy: all_classes_topk_merge
 
 tags:
-  - branch
-  - singleclass
+  - pooled
+  - multiclass

@@ -5,12 +5,12 @@ Outputs metrics to stdout and saves metrics.json.
 
 Variants:
   baseline          E1: AFP only, no SAM3
-  branch            E2-E4: old s-seq code (avg_pool2d, same IDRs x3)
+  pooled            E2-E4: avg_pool2d on raw encoder hidden states (SAM3 doesn't affect depth)
   sam-replace       E5-E6: linear projection replaces AFP
   sam-concat        E7-E9: linear projection concatenated with AFP
   sam-cached-video  E10: concat with cached video queries
 
-Prompt modes (for branch/replace/concat):
+Prompt modes (for pooled/replace/concat):
   empty        empty string ""
   multiclass   "car . truck . person . bicycle . building . tree . road sign . pole"
   singleclass  per-class x8, merge top-32
@@ -50,8 +50,8 @@ def denormalize_imagenet(img_tensor):
 # SAM3 query extraction
 # ---------------------------------------------------------------------------
 
-def get_sam_queries_branch(processor, raw_img, prompt_mode):
-    """Old s-seq branch behavior: get raw hidden states, avg_pool2d to (32, 128)."""
+def get_sam_queries_pooled(processor, raw_img, prompt_mode):
+    """Pooled path: average encoder hidden states over layers, then avg_pool2d to (32, 128)."""
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         state = processor.set_image(raw_img)
         if prompt_mode == "empty":
@@ -116,14 +116,14 @@ def get_sam_queries_proj(processor, raw_img, prompt_mode):
 
 def _validate_eval_args(cfg: dict[str, Any]) -> None:
     variant = cfg["variant"]
-    if variant in ("branch", "sam-replace", "sam-concat") and cfg.get("sam_checkpoint") is None:
+    if variant in ("pooled", "sam-replace", "sam-concat") and cfg.get("sam_checkpoint") is None:
         raise ValueError(f"sam_checkpoint is required for variant '{variant}'")
     if variant == "sam-cached-video" and cfg.get("sam3_cache_dir") is None:
         raise ValueError("sam3_cache_dir is required for variant 'sam-cached-video'")
 def main():
     parser = argparse.ArgumentParser(description="Depth evaluation")
     parser.add_argument("--variant", required=True,
-                        choices=["baseline", "branch", "sam-replace", "sam-concat", "sam-cached-video"])
+                        choices=["baseline", "pooled", "sam-replace", "sam-concat", "sam-cached-video"])
     parser.add_argument("--prompt-mode", default="multiclass",
                         choices=["empty", "multiclass", "singleclass", "classonly"])
     parser.add_argument("--config-file", required=True)
@@ -178,7 +178,7 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
 
     # Load SAM3 if needed
     sam_proc = None
-    if variant in ("branch", "sam-replace", "sam-concat"):
+    if variant in ("pooled", "sam-replace", "sam-concat"):
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
         use_presence = (prompt_mode != "classonly")
@@ -207,9 +207,9 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
             if variant == "baseline":
                 pass  # just AFP
 
-            elif variant == "branch":
+            elif variant == "pooled":
                 raw_img = denormalize_imagenet(data[0])
-                raw_idrs = get_sam_queries_branch(sam_proc, raw_img, prompt_mode)
+                raw_idrs = get_sam_queries_pooled(sam_proc, raw_img, prompt_mode)
                 if raw_idrs is not None:
                     raw_idrs = tuple(r.to(device).float() for r in raw_idrs)
 
@@ -269,7 +269,7 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Depth evaluation")
     parser.add_argument("--variant", required=True,
-                        choices=["baseline", "branch", "sam-replace", "sam-concat", "sam-cached-video"])
+                        choices=["baseline", "pooled", "sam-replace", "sam-concat", "sam-cached-video"])
     parser.add_argument("--prompt-mode", default="multiclass",
                         choices=["empty", "multiclass", "singleclass", "classonly"])
     parser.add_argument("--config-file", required=True)

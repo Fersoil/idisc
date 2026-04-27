@@ -214,16 +214,11 @@ def main(cfg: DictConfig) -> None:
                 metrics_payload = metrics
                 _write_json(metrics_path, metrics_payload)
 
-            log_payload: dict[str, Any] = {
-                "meta/git_branch": git_branch,
-                "meta/git_commit": git_commit,
-            }
+            log_payload: dict[str, Any] = _flatten_dict(metrics_payload, "eval_sam")
+            log_payload["meta/git_branch"] = git_branch
+            log_payload["meta/git_commit"] = git_commit
             log_metrics(log_payload)
-
-            summary_payload: dict[str, Any] = _flatten_dict(metrics_payload, "eval_sam")
-            summary_payload["meta/git_branch"] = git_branch
-            summary_payload["meta/git_commit"] = git_commit
-            log_summary(summary_payload)
+            log_summary(log_payload)
 
             log_artifact(
                 run_dir,

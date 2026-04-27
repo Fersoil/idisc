@@ -5,6 +5,7 @@ from typing import Any
 from omegaconf import DictConfig, OmegaConf
 
 IDR_SOURCE_AND_MODE_TO_VARIANT = {
+    # raw path uses avg_pool2d on hidden states; sam_mode has no effect there
     ("raw", "none"): "branch",
     ("raw", "concat"): "branch",
     ("raw", "replace"): "branch",

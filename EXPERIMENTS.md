@@ -8,7 +8,7 @@ The main entrypoint is:
 python scripts/run_with_hydra.py experiment=<name> [overrides...]
 ```
 
-By default, runs are logged to W&B, and the main metrics are written to the run summary. The resolved config and outputs are saved per run.
+By default, runs are not tracked remotely. Pass `tracking=wandb` to enable W&B logging. The resolved config and outputs are always saved per run.
 
 ## Experiment groups
 
@@ -89,15 +89,16 @@ You can switch path presets with:
 - `paths=local`
 - `paths=cluster`
 
-Tracking is controlled separately:
-
-- `tracking=wandb`
-- `tracking=none`
-
-Example:
+Tracking is disabled by default. Enable W&B with `tracking=wandb`:
 
 ```bash
-python scripts/run_with_hydra.py experiment=baseline paths=local tracking=none
+python scripts/run_with_hydra.py experiment=baseline tracking=wandb
+```
+
+To run without tracking (default):
+
+```bash
+python scripts/run_with_hydra.py experiment=baseline paths=local
 ```
 
 ## Output structure

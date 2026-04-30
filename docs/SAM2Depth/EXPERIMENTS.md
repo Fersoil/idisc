@@ -189,7 +189,7 @@ outputs/runs/<timestamp>_<exp_id>_<gitsha>/
 To verify all experiments launch and complete without errors:
 
 ```bash
-sbatch scripts/experiments/smoke_test.sh
+sbatch scripts/experiments/run_all.sh
 ```
 
 Or run the representative subset manually:

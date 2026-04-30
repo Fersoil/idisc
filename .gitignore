@@ -48,3 +48,7 @@ logs/
 # hydra
 outputs/
 results/
+
+
+# I am not sure about this
+eval_results/

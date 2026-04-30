@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=iDisc-run-suite
+#SBATCH --job-name=iDisc-run-all
 #SBATCH --account=3dv
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/run_suite_%j.out
-#SBATCH --error=logs/run_suite_%j.err
+#SBATCH --output=logs/run_all_%j.out
+#SBATCH --error=logs/run_all_%j.err
 
 set -euo pipefail
 

@@ -62,8 +62,9 @@ class KITTISequenceDataset(Dataset):
         clip_length=4,
         depth_scale=256,
         crop="eigen",
-        sam3_cache_dir=None,   
-        sam3_top_k=32,         
+        sam3_cache_dir=None,
+        sam3_top_k=32,
+        **kwargs,
     ):
         super().__init__()
         self.base_path = base_path

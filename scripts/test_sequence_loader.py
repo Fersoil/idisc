@@ -4,6 +4,7 @@ ds = KITTISequenceDataset(
     test_mode=True,
     base_path="/work/courses/3dv/team17/idisc/datasets/kitti",
     manifest_path="splits/kitti/sequence_manifest.json",
+    sam3_cache_dir="/work/courses/3dv/team17/sam3_cache",
     clip_length=4,
 )
 import ipdb; ipdb.set_trace()
@@ -21,6 +22,7 @@ print(sample2["frame_indices"])
 
 if sample["sequence_id"] == sample2["sequence_id"]:
     overlap = [f for f in sample["frame_indices"] if f in sample2["frame_indices"]]
+    import ipdb; ipdb.set_trace()
     assert len(overlap) == 3, f"Expected 3 overlapping frames, got {len(overlap)}: {overlap}"
     print("Sliding window overlap OK")
 else:

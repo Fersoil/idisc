@@ -51,11 +51,24 @@ class KITTISequenceDataset(Dataset):
     WIDTH = 1216
     MEAN = [0.485, 0.456, 0.406]
     STD = [0.229, 0.224, 0.225]
+    min_depth = 0.01
+    max_depth = 80
 
-    def __init__(self, test_mode, base_path, manifest_path, clip_length=4):
+    def __init__(
+        self,
+        test_mode,
+        base_path,
+        manifest_path,
+        clip_length=4,
+        depth_scale=256,
+        crop="eigen",
+    ):
         super().__init__()
         self.base_path = base_path
         self.clip_length = clip_length
+        self.test_mode = test_mode
+        self.depth_scale = depth_scale
+        self.crop = crop
 
         with open(manifest_path) as f:
             manifest = json.load(f)
@@ -81,29 +94,109 @@ class KITTISequenceDataset(Dataset):
         intrinsics[1, 2] = intrinsics[1, 2] - h_start
         return image, intrinsics
 
+    def eval_mask(self, valid_mask):
+        if self.test_mode and self.crop is not None:
+            h, w = valid_mask.shape[-2:]
+            crop_mask = np.zeros_like(valid_mask)
+            if "garg" in self.crop:
+                crop_mask[
+                    int(0.40810811 * h) : int(0.99189189 * h),
+                    int(0.03594771 * w) : int(0.96405229 * w),
+                ] = 1
+            elif "eigen" in self.crop:
+                crop_mask[
+                    int(0.3324324 * h) : int(0.91351351 * h),
+                    int(0.03594771 * w) : int(0.96405229 * w),
+                ] = 1
+            valid_mask = np.logical_and(valid_mask, crop_mask)
+        return valid_mask
+
+    def _sample_train_aug(self):
+        """Sample all random decisions once; caller applies them identically to every frame."""
+        do_flip = np.random.random() < 0.5
+        phot_ops = []
+        if np.random.random() < 0.8:
+            choice = np.random.randint(5)
+            if choice == 0:
+                phot_ops = [(TF.adjust_brightness, {"brightness_factor": 10 ** np.random.uniform(-0.2, 0.2)})]
+            elif choice == 1:
+                phot_ops = [(TF.adjust_contrast, {"contrast_factor": 10 ** np.random.uniform(-0.2, 0.2)})]
+            elif choice == 2:
+                phot_ops = [(TF.adjust_saturation, {"saturation_factor": 10 ** np.random.uniform(-0.2, 0.2)})]
+            elif choice == 3:
+                phot_ops = [(TF.adjust_gamma, {"gamma": np.random.uniform(0.8, 1.2)})]
+            else:
+                phot_ops = [(TF.adjust_hue, {"hue_factor": np.random.uniform(-0.1, 0.1)})]
+        return {"do_flip": do_flip, "phot_ops": phot_ops}
+
     def __len__(self):
         return len(self.clips)
 
     def __getitem__(self, idx):
         clip = self.clips[idx]
-        raw_intrinsics = self.CAM_INTRINSIC[clip["date"]][:, :3]
+        frame_indices = clip["frame_indices"]
+        drive_dir = os.path.dirname(os.path.dirname(clip["image_dir"]))
+        depth_dir = os.path.join(drive_dir, "proj_depth", "groundtruth", "image_02")
+
+        raws = []
+        raw_depths = []
+        for fi in frame_indices:
+            raws.append(
+                np.asarray(
+                    Image.open(os.path.join(self.base_path, clip["image_dir"], f"{fi:010d}.png"))
+                ).astype(np.uint8)
+            )
+            depth_path = os.path.join(self.base_path, depth_dir, f"{fi:010d}.png")
+            if os.path.isfile(depth_path):
+                raw_depths.append(
+                    np.asarray(Image.open(depth_path)).astype(np.float32) / self.depth_scale
+                )
+            else:
+                raw_depths.append(None)
+
+        h0 = int(raws[0].shape[0] - self.HEIGHT)
+        w0 = int((raws[0].shape[1] - self.WIDTH) / 2)
+
+        clip_intrinsics = self.CAM_INTRINSIC[clip["date"]][:, :3].clone()
+        clip_intrinsics[0, 2] -= w0
+        clip_intrinsics[1, 2] -= h0
+
+        aug = self._sample_train_aug() if not self.test_mode else {"do_flip": False, "phot_ops": []}
+
+        if aug["do_flip"]:
+            clip_intrinsics[0, 2] = self.WIDTH - clip_intrinsics[0, 2]
 
         images = []
-        clip_intrinsics = None
-        for frame_idx in clip["frame_indices"]:
-            path = os.path.join(
-                self.base_path, clip["image_dir"], f"{frame_idx:010d}.png"
-            )
-            image = np.asarray(Image.open(path)).astype(np.uint8)
-            image, frame_intrinsics = self.preprocess_crop(image, raw_intrinsics)
-            if clip_intrinsics is None:
-                clip_intrinsics = frame_intrinsics
-            image = TF.normalize(TF.to_tensor(image), mean=self.MEAN, std=self.STD)
-            images.append(image)
+        for raw in raws:
+            pil = Image.fromarray(raw[h0 : h0 + self.HEIGHT, w0 : w0 + self.WIDTH])
+            if aug["do_flip"]:
+                pil = TF.hflip(pil)
+            for fn, kw in aug["phot_ops"]:
+                pil = fn(pil, **kw)
+            images.append(TF.normalize(TF.to_tensor(pil), mean=self.MEAN, std=self.STD))
+
+        depths = []
+        masks = []
+        for raw_d in raw_depths:
+            if raw_d is not None:
+                d = raw_d[h0 : h0 + self.HEIGHT, w0 : w0 + self.WIDTH]
+                if aug["do_flip"]:
+                    d = np.fliplr(d).copy()
+                mask = d > self.min_depth
+                if self.test_mode:
+                    mask = np.logical_and(mask, d < self.max_depth)
+                    mask = self.eval_mask(mask)
+            else:
+                d = np.zeros((self.HEIGHT, self.WIDTH), dtype=np.float32)
+                mask = np.zeros((self.HEIGHT, self.WIDTH), dtype=bool)
+            depths.append(torch.from_numpy(d).unsqueeze(0))
+            masks.append(torch.from_numpy(mask.astype(np.uint8)).unsqueeze(0))
 
         return {
-            "images": torch.stack(images),
-            "frame_indices": clip["frame_indices"],
+            "images": torch.stack(images),          # (T, 3, H, W)
+            "depths": torch.stack(depths),           # (T, 1, H, W)
+            "masks": torch.stack(masks),             # (T, 1, H, W)
+            "frame_indices": frame_indices,
             "sequence_id": clip["drive_key"],
             "camera_intrinsics": clip_intrinsics,
         }

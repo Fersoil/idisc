@@ -2,11 +2,11 @@ from idisc.dataloders.kitti_sequence import KITTISequenceDataset
 
 ds = KITTISequenceDataset(
     test_mode=True,
-    base_path="/path/to/kitti",
+    base_path="/work/courses/3dv/team17/idisc/datasets/kitti",
     manifest_path="splits/kitti/sequence_manifest.json",
     clip_length=4,
 )
-
+import ipdb; ipdb.set_trace()
 print(f"Total clips: {len(ds)}")
 
 sample = ds[0]

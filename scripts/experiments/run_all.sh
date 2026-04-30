@@ -14,7 +14,7 @@ IDISC_REPO="$HOME/idisc"
 module add cuda/12.8
 source "$IDISC_REPO/.venv/bin/activate"
 export CUDA_HOME=$(dirname "$(dirname "$(which nvcc)")")
-export PYTHONPATH="$IDISC_REPO:$IDISC_REPO/sam3:${PYTHONPATH:-}"
+export PYTHONPATH="$IDISC_REPO:${PYTHONPATH:-}"
 
 cd "$IDISC_REPO"
 

@@ -9,7 +9,8 @@ tqdm
 wheel
 scipy
 
-# SAM3 issues
+# SAM3 
+sam3
 opencv-python>=4.8,<4.10
 numpy>=1.26,<2
 pycocotools

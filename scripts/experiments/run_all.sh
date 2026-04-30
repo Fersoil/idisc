@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=iDisc-smoke-test
+#SBATCH --job-name=iDisc-run-suite
 #SBATCH --account=3dv
-#SBATCH --time=04:00:00
-#SBATCH --output=logs/smoke_test_%j.out
-#SBATCH --error=logs/smoke_test_%j.err
+#SBATCH --time=12:00:00
+#SBATCH --output=logs/run_suite_%j.out
+#SBATCH --error=logs/run_suite_%j.err
 
 set -euo pipefail
 
@@ -18,7 +18,7 @@ export PYTHONPATH="$IDISC_REPO:$IDISC_REPO/sam3:${PYTHONPATH:-}"
 
 cd "$IDISC_REPO"
 
-RUN="python scripts/run_with_hydra.py"
+RUN="python scripts/run_with_hydra.py tracking=wandb"
 
 EXPERIMENTS=(
   # Detection (eval_sam task)
@@ -38,7 +38,7 @@ EXPERIMENTS=(
   concat_singleclass
   concat_classonly
   # Video (requires prior C1 cache; skip if not yet cached)
-  # concat_video
+  concat_video
 )
 
 PASS=()
@@ -47,9 +47,31 @@ FAIL=()
 for exp in "${EXPERIMENTS[@]}"; do
   echo ""
   echo "════════════════════════════════"
-  echo " Smoke: experiment=$exp"
+  echo " Run: experiment=$exp"
   echo "════════════════════════════════"
   if $RUN experiment="$exp"; then
+    PASS+=("$exp")
+  else
+    echo "FAILED: $exp" >&2
+    FAIL+=("$exp")
+  fi
+done
+
+FINETUNE_EXPERIMENTS=(
+  # Fine-tuning (fast schedule)
+  finetune_replace_multiclass
+  finetune_replace_singleclass
+  finetune_concat_singleclass
+  # Video fine-tune (requires prior C1 cache; skip if not yet cached)
+  finetune_concat_video
+)
+
+for exp in "${FINETUNE_EXPERIMENTS[@]}"; do
+  echo ""
+  echo "════════════════════════════════"
+  echo " Run: experiment=$exp finetune=fast"
+  echo "════════════════════════════════"
+  if $RUN experiment="$exp" finetune=fast; then
     PASS+=("$exp")
   else
     echo "FAILED: $exp" >&2

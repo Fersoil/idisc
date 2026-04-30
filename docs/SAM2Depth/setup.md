@@ -56,10 +56,7 @@ Here we use cuda 12.8 that supports GPUs used in the student cluster:
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128 # this should match module version
 
-# install sam3
-pip install sam3/
-
-# install idisc requirements
+# install idisc requirements + sam3
 pip install -r requirements.txt
 
 ```

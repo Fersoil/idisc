@@ -155,7 +155,7 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg.get("sam3_cache_dir")),
+                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
                 "output_dir": str(run_dir),
                 "config": runtime_cfg,
             }
@@ -237,7 +237,8 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg.get("sam3_cache_dir")),
+                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
+                "use_sequence_dataset": runtime_cfg.get("finetune", {}).get("use_sequence_dataset", False),
                 "config": runtime_cfg,
                 "finetune": {
                     **runtime_cfg["finetune"],

@@ -3,6 +3,7 @@ from .dataset import BaseDataset
 from .ddad import DDADDataset
 from .diode import DiodeDataset
 from .kitti import KITTIDataset
+from .kitti_sequence import KITTISequenceDataset
 from .nyu import NYUDataset
 from .nyu_normals import NYUNormalsDataset
 from .sunrgbd import SUNRGBDDataset
@@ -12,6 +13,7 @@ __all__ = [
     "NYUDataset",
     "NYUNormalsDataset",
     "KITTIDataset",
+    "KITTISequenceDataset",
     "ArgoverseDataset",
     "DDADDataset",
     "DiodeDataset",

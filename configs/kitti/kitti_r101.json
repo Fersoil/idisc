@@ -21,6 +21,8 @@
         "train_dataset": "KITTIDataset",
         "val_dataset": "KITTIDataset",
         "data_root": "datasets/kitti",
+        "manifest_path": "splits/kitti/sequence_manifest.json",
+        "clip_length": 4,
         "benchmark": false,
         "augmentations": {
             "horizontal_flip": 0.5,

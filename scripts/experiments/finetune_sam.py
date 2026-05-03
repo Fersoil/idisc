@@ -74,15 +74,41 @@ def extract_online_queries(proc, raw_img, prompt_mode):
             return iq.float().clone() if iq is not None else None
 
 
+def _flatten_sequence_batch(batch, device):
+    """Flatten (B, T, ...) sequence batches into (B*T, ...) so a single per-frame
+    training/validation loop handles both sequence and single-frame datasets."""
+    images = batch["images"].to(device)
+    B, T = images.shape[:2]
+    data = images.view(B * T, *images.shape[2:])
+    gt = batch["depths"].to(device).view(B * T, *batch["depths"].shape[2:])
+    mask = batch["masks"].to(device).view(B * T, *batch["masks"].shape[2:])
+    q = batch.get("sam3_queries")
+    sam3_q = (
+        q.to(device).view(B * T, q.shape[2], q.shape[3])
+        if (q is not None and q.dim() == 4)
+        else None
+    )
+    return data, gt, mask, sam3_q, B * T
+
+
+def _unpack_batch(batch, device):
+    """Returns (data, gt, mask, sam3_q, n_samples) for both single-frame and sequence batches."""
+    if "images" in batch:
+        return _flatten_sequence_batch(batch, device)
+    data = batch["image"].to(device)
+    gt = batch["gt"].to(device)
+    mask = batch["mask"].to(device)
+    q = batch.get("sam3_queries")
+    sam3_q = q.to(device) if (q is not None and q.dim() >= 2) else None
+    return data, gt, mask, sam3_q, data.shape[0]
+
+
 def validate_model(model, valid_loader, context, device, sam_mode="concat",
                     sam_proc=None, prompt_mode=None):
     metrics_tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
 
     for i, batch in enumerate(valid_loader):
-        data = batch["image"].to(device)
-        gt = batch["gt"].to(device)
-        mask = batch["mask"].to(device)
-        sam3_q = batch.get("sam3_queries")
+        data, gt, mask, sam3_q, _ = _unpack_batch(batch, device)
 
         batch_preds = []
         for idx in range(data.shape[0]):
@@ -95,7 +121,7 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
             elif sam3_q is not None:
                 q = sam3_q[idx]
                 if q.dim() >= 2 and q.shape[0] > 0:
-                    iq = q.to(device)
+                    iq = q
 
             with context:
                 pred, _, _ = model(
@@ -155,6 +181,9 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     if not encoder_owns_sam3 and sam_checkpoint is None and sam3_cache_dir is None:
         raise ValueError("Either sam_checkpoint or sam3_cache_dir is required")
 
+    if cfg.get("use_sequence_dataset"):
+        config["data"]["train_dataset"] = "KITTISequenceDataset"
+
     finetune_cfg = cfg.get("finetune", {})
     output_dir = finetune_cfg.get("output_dir", cfg.get("output_dir", "finetune_output"))
     n_iters = int(finetune_cfg.get("n_iters", cfg.get("n_iters", 5000)))
@@ -212,6 +241,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     total = sum(p.numel() for p in model.parameters())
     print(f"  Trainable params: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)", flush=True)
 
+    import ipdb; ipdb.set_trace()
     # Datasets
     cache_dir = sam3_cache_dir if not use_online_sam else None
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
@@ -219,13 +249,19 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     train_dataset = getattr(custom_dataset, config["data"]["train_dataset"])(
         test_mode=False,
         base_path=data_path,
-        crop=config["data"]["crop"],
-        augmentations_db=config["data"]["augmentations"],
+        crop=config["data"].get("crop"),
+        augmentations_db=config["data"].get("augmentations", {}),
         sam3_cache_dir=cache_dir,
+        manifest_path=config["data"].get("manifest_path"),
+        clip_length=config["data"].get("clip_length", 4),
     )
     valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
-        test_mode=True, base_path=data_path, crop=config["data"]["crop"],
+        test_mode=True,
+        base_path=data_path,
+        crop=config["data"].get("crop"),
         sam3_cache_dir=cache_dir,
+        manifest_path=config["data"].get("manifest_path"),
+        clip_length=config["data"].get("clip_length", 4),
     )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
@@ -271,15 +307,12 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
             if step >= n_iters:
                 break
 
-            data = batch["image"].to(device)
-            gt = batch["gt"].to(device)
-            mask = batch["mask"].to(device)
-            sam3_q = batch.get("sam3_queries")
+            data, gt, mask, sam3_q, n_samples = _unpack_batch(batch, device)
 
             optimizer.zero_grad()
             total_loss = 0.0
 
-            for idx in range(data.shape[0]):
+            for idx in range(n_samples):
                 iq = None
                 if use_online_sam:
                     raw_img = denormalize_imagenet(data[idx])
@@ -290,7 +323,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 elif sam3_q is not None:
                     q = sam3_q[idx]
                     if q.dim() >= 2 and q.shape[0] > 0:
-                        iq = q.to(device)
+                        iq = q
 
                 with context:
                     pred, losses, _ = model(
@@ -300,7 +333,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                         gt=gt[idx:idx + 1],
                         mask=mask[idx:idx + 1],
                     )
-                    loss = sum(v for v in losses["opt"].values()) / data.shape[0]
+                    loss = sum(v for v in losses["opt"].values()) / n_samples
 
                 loss.backward()
                 total_loss += loss.item()
@@ -404,6 +437,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--val-interval", type=int, default=500)
     parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--use-sequence-dataset", action="store_true",
+                        help="Override config to use KITTISequenceDataset for training")
     return parser.parse_args()
 
 
@@ -423,6 +458,7 @@ def main():
             "lr": args.lr,
             "val_interval": args.val_interval,
             "batch_size": args.batch_size,
+            "use_sequence_dataset": args.use_sequence_dataset,
         }
     )
 

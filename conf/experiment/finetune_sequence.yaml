@@ -1,0 +1,23 @@
+# @package _global_
+
+run:
+  exp_id: finetune-sequence
+  task: finetune
+
+finetune:
+  n_iters: 5000
+  lr: 5.0e-5
+  batch_size: 2
+  val_interval: 500
+  use_sequence_dataset: true
+  output_dir: finetune_output/${run.exp_id}
+
+method:
+  idr_source: afp
+  sam_mode: concat
+  query_source: cached
+
+tags:
+  - finetune
+  - concat
+  - sequence

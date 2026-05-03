@@ -116,7 +116,16 @@ def get_sam_queries_proj(processor, raw_img, prompt_mode):
 
 def _validate_eval_args(cfg: dict[str, Any]) -> None:
     variant = cfg["variant"]
-    if variant in ("pooled", "sam-replace", "sam-concat") and cfg.get("sam_checkpoint") is None:
+    config = cfg.get("config")
+    encoder_owns_sam3 = (
+        config is not None
+        and config.get("model", {}).get("pixel_encoder", {}).get("name") == "sam3_image"
+    )
+    if (
+        variant in ("pooled", "sam-replace", "sam-concat")
+        and not encoder_owns_sam3
+        and cfg.get("sam_checkpoint") is None
+    ):
         raise ValueError(f"sam_checkpoint is required for variant '{variant}'")
     if variant == "sam-cached-video" and cfg.get("sam3_cache_dir") is None:
         raise ValueError("sam3_cache_dir is required for variant 'sam-cached-video'")
@@ -155,12 +164,19 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
     if device.type == "cuda":
         print(f"GPU:        {torch.cuda.get_device_name(0)}", flush=True)
 
+    encoder_owns_sam3 = (
+        config["model"]["pixel_encoder"].get("name") == "sam3_image"
+    )
+
     # Load iDisc
     model = IDisc.build(config)
-    model.load_pretrained(cfg["model_file"])
+    if cfg.get("load_pretrained", not encoder_owns_sam3):
+        model.load_pretrained(cfg["model_file"])
+        print("iDisc loaded (pretrained).", flush=True)
+    else:
+        print("iDisc built from scratch (no pretrained weights).", flush=True)
     model = model.to(device)
     model.eval()
-    print("iDisc loaded.", flush=True)
 
     # Load data
     cache_dir = cfg.get("sam3_cache_dir") if variant == "sam-cached-video" else None
@@ -176,9 +192,9 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
     f16 = config["training"].get("f16", False)
     context = torch.autocast(device_type="cuda", dtype=torch.float16, enabled=f16)
 
-    # Load SAM3 if needed
+    # Load SAM3 if needed (skipped when the pixel_encoder owns it)
     sam_proc = None
-    if variant in ("pooled", "sam-replace", "sam-concat"):
+    if variant in ("pooled", "sam-replace", "sam-concat") and not encoder_owns_sam3:
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
         use_presence = (prompt_mode != "classonly")
@@ -214,17 +230,20 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
                     raw_idrs = tuple(r.to(device).float() for r in raw_idrs)
 
             elif variant == "sam-replace":
-                raw_img = denormalize_imagenet(data[0])
-                instance_queries = get_sam_queries_proj(sam_proc, raw_img, prompt_mode)
-                if instance_queries is not None:
-                    instance_queries = instance_queries.to(device)
+                if sam_proc is not None:
+                    raw_img = denormalize_imagenet(data[0])
+                    instance_queries = get_sam_queries_proj(sam_proc, raw_img, prompt_mode)
+                    if instance_queries is not None:
+                        instance_queries = instance_queries.to(device)
+                # else: encoder owns SAM3 and yields queries from its forward
                 sam_mode = "replace"
 
             elif variant == "sam-concat":
-                raw_img = denormalize_imagenet(data[0])
-                instance_queries = get_sam_queries_proj(sam_proc, raw_img, prompt_mode)
-                if instance_queries is not None:
-                    instance_queries = instance_queries.to(device)
+                if sam_proc is not None:
+                    raw_img = denormalize_imagenet(data[0])
+                    instance_queries = get_sam_queries_proj(sam_proc, raw_img, prompt_mode)
+                    if instance_queries is not None:
+                        instance_queries = instance_queries.to(device)
                 sam_mode = "concat"
 
             elif variant == "sam-cached-video":

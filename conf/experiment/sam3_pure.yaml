@@ -1,0 +1,41 @@
+# @package _global_
+#
+# Pure SAM3 + iDisc d2c (E11):
+#   - SAM3 replaces ResNet/Swin as the visual backbone (single forward pass
+#     yields both the FPN features and the instance-query tokens).
+#   - sam_mode=replace routes SAM3 tokens through sam3_proj into the d2c
+#     bottleneck; AFP is bypassed.
+#   - iDisc-side modules (pixel_decoder, AFP, ISD, sam3_proj) train fresh
+#     from random init; no pretrained iDisc weights are loaded.
+
+defaults:
+  - override /dataset: kitti
+
+run:
+  exp_id: E11-sam3-pure
+  task: finetune
+  load_pretrained: false
+
+dataset:
+  legacy_config_path: configs/kitti/kitti_sam3.json
+
+method:
+  idr_source: afp
+  sam_mode: replace
+  query_source: online
+  prompt:
+    mode: multiclass
+    classes: [car, truck, person, bicycle, building, tree, road sign, pole]
+    use_bbox: false
+    strategy: top_k_by_confidence
+
+finetune:
+  n_iters: 1000
+  lr: 2.0e-4
+  val_interval: 100
+  batch_size: 2
+
+tags:
+  - sam3-pure
+  - replace
+  - multiclass

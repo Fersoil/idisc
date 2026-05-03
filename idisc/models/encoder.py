@@ -107,3 +107,9 @@ def efficientnet_b5(pretrained: bool = True, **kwargs):
     basemodel.global_pool = nn.Identity()
     basemodel.classifier = nn.Identity()
     return EfficientNet(basemodel, [5, 6, 8, 15])  # 11->15
+
+
+def sam3_image(img_size, **kwargs):
+    from idisc.models.sam3_encoder import Sam3PixelEncoder
+
+    return Sam3PixelEncoder(img_size=img_size, **kwargs)

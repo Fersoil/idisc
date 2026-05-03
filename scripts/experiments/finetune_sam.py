@@ -123,12 +123,14 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
 
 def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
     mode = cfg.get("mode")
-    if mode in {"concat", "replace"}:
+    if mode in {"concat", "replace", "translate"}:
         return mode
 
     variant = cfg.get("variant")
     if variant == "sam-replace":
         return "replace"
+    if variant == "sam-translate":
+        return "translate"
     if variant in {"sam-concat", "sam-cached-video", "concat", "replace"}:
         return "concat" if variant != "replace" else "replace"
 
@@ -146,7 +148,11 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     sam_checkpoint = cfg.get("sam_checkpoint")
     sam3_cache_dir = cfg.get("sam3_cache_dir")
 
-    if sam_checkpoint is None and sam3_cache_dir is None:
+    encoder_owns_sam3 = (
+        config["model"]["pixel_encoder"].get("name") == "sam3_image"
+    )
+
+    if not encoder_owns_sam3 and sam_checkpoint is None and sam3_cache_dir is None:
         raise ValueError("Either sam_checkpoint or sam3_cache_dir is required")
 
     finetune_cfg = cfg.get("finetune", {})
@@ -156,7 +162,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     val_interval = int(finetune_cfg.get("val_interval", cfg.get("val_interval", 500)))
     batch_size = int(finetune_cfg.get("batch_size", cfg.get("batch_size", 2)))
 
-    use_online_sam = sam_checkpoint is not None
+    use_online_sam = sam_checkpoint is not None and not encoder_owns_sam3
 
     seed = config["generic"]["seed"]
     random.seed(seed)
@@ -179,16 +185,28 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     # Load iDisc
     print("Loading iDisc model...", flush=True)
     model = IDisc.build(config).to(device)
-    model.load_pretrained(cfg["model_file"])
-    print("  iDisc loaded.", flush=True)
+    load_pretrained = cfg.get("load_pretrained", not encoder_owns_sam3)
+    if load_pretrained:
+        model.load_pretrained(cfg["model_file"])
+        print("  iDisc loaded (pretrained weights).", flush=True)
+    else:
+        print("  iDisc built from scratch (no pretrained weights).", flush=True)
 
-    # Freeze everything except sam3_proj and ISD
-    for param in model.parameters():
-        param.requires_grad = False
-    for param in model.sam3_proj.parameters():
-        param.requires_grad = True
-    for param in model.isd.parameters():
-        param.requires_grad = True
+    if encoder_owns_sam3:
+        # Pure SAM3 + d2c: SAM3 is frozen inside the encoder; iDisc-side
+        # modules (pixel_decoder, AFP, ISD, sam3_proj) train fresh.
+        for param in model.parameters():
+            param.requires_grad = True
+        for param in model.pixel_encoder.sam_model.parameters():
+            param.requires_grad = False
+    else:
+        # Legacy fine-tune: freeze everything except sam3_proj and ISD.
+        for param in model.parameters():
+            param.requires_grad = False
+        for param in model.sam3_proj.parameters():
+            param.requires_grad = True
+        for param in model.isd.parameters():
+            param.requires_grad = True
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -310,31 +328,51 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                                              sam_mode=sam_mode, sam_proc=sam_proc,
                                              prompt_mode=prompt_mode if use_online_sam else None)
                 model.train()
-                for param in model.parameters():
-                    param.requires_grad = False
-                for param in model.sam3_proj.parameters():
-                    param.requires_grad = True
-                for param in model.isd.parameters():
-                    param.requires_grad = True
+                if encoder_owns_sam3:
+                    for param in model.parameters():
+                        param.requires_grad = True
+                    for param in model.pixel_encoder.sam_model.parameters():
+                        param.requires_grad = False
+                else:
+                    for param in model.parameters():
+                        param.requires_grad = False
+                    for param in model.sam3_proj.parameters():
+                        param.requires_grad = True
+                    for param in model.isd.parameters():
+                        param.requires_grad = True
 
                 abs_rel = metrics.get("abs_rel", np.inf)
                 print(f"  abs_rel={abs_rel:.6f}  (best={best_abs_rel:.6f})", flush=True)
                 for k, v in sorted(metrics.items()):
                     print(f"    {k}: {v:.6f}", flush=True)
 
+                # Drop frozen SAM3 weights from checkpoints — they're reloaded
+                # from sam_checkpoint at startup, so persisting them per-save
+                # bloats the checkpoint by ~16x and triggers OOM/EDQUOT.
+                def _trainable_state_dict():
+                    sd = model.state_dict()
+                    if encoder_owns_sam3:
+                        sd = {k: v for k, v in sd.items()
+                              if not k.startswith("pixel_encoder.sam_model.")}
+                    return sd
+
                 if abs_rel < best_abs_rel:
                     best_abs_rel = abs_rel
                     ckpt_path = os.path.join(output_dir, "best_sam_finetuned.pt")
-                    torch.save(model.state_dict(), ckpt_path)
+                    torch.save(_trainable_state_dict(), ckpt_path)
                     print(f"  New best! Saved to {ckpt_path}", flush=True)
 
                 ckpt_path = os.path.join(output_dir, f"checkpoint_step{step}.pt")
-                torch.save(model.state_dict(), ckpt_path)
+                torch.save(_trainable_state_dict(), ckpt_path)
                 print(f"  Checkpoint saved to {ckpt_path}\n", flush=True)
 
     # Final save
     final_path = os.path.join(output_dir, "final_sam_finetuned.pt")
-    torch.save(model.state_dict(), final_path)
+    final_sd = model.state_dict()
+    if encoder_owns_sam3:
+        final_sd = {k: v for k, v in final_sd.items()
+                    if not k.startswith("pixel_encoder.sam_model.")}
+    torch.save(final_sd, final_path)
     print(f"\nFine-tuning complete. Final model saved to {final_path}", flush=True)
     print(f"Best abs_rel: {best_abs_rel:.6f}", flush=True)
 

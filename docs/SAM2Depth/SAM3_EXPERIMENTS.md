@@ -6,6 +6,35 @@ Test whether SAM3 (a segmentation foundation model) can serve as a complete visu
 
 ---
 
+## How to run
+
+Use the unified launcher from the repo root:
+
+```bash
+./scripts/launch.sh <key> [-- <hydra_overrides>]
+```
+
+| Key | Experiment | Output dir | Val metric | When to kill |
+|-----|-----------|-----------|-----------|--------------|
+| `baseline` | E1 iDisc-R101 pretrained (eval) | `outputs/runs/…E1…/metrics.json` | abs\_rel | n/a (eval only) |
+| `e11` | E11/E20 SAM3 pure, single-frame | `finetune_output/E20-sam3-pure-multiclass/` | abs\_rel | step 5000 (~2h) or if plateau visible at step 3000 |
+| `e12` | E12 SAM3 translate (Sam3QueryToIDR) | `finetune_output/E12-sam3-translate/` | abs\_rel | step 5000 (~2h) |
+| `e18` | E18 SAM3 pure + 4-frame sequence | `finetune_output/E18-sam3-pure-sequence/` | abs\_rel | step 5000 (~5h); expect spike at step 1000 then recovery |
+| `e19` | E19 SAM3 video encoder + sequence | `finetune_output/E19-sam3-video-sequence/` | abs\_rel | kill if val keeps rising after step 1000 (seen to diverge) |
+
+**Common overrides:**
+```bash
+./scripts/launch.sh e11 -- finetune.n_iters=500    # fast smoke test
+./scripts/launch.sh e11 -- finetune.lr=1e-4         # learning rate sweep
+```
+
+Logs go to `logs/<job_name>_<jobid>.{out,err}`. Monitor with:
+```bash
+tail -f logs/<job_name>_<jobid>.out
+```
+
+---
+
 ## Run log
 
 ### Run 1 — first end-to-end "pure SAM3" training

@@ -1,16 +1,13 @@
 #!/usr/bin/env python
 """
-Fine-tune iDisc with SAM3 queries.
-Freezes pixel_encoder, pixel_decoder, and AFP.
-Only trains: sam3_proj (Linear(256,128) per resolution) + ISD heads.
+Training backend for SAM3+iDisc depth fine-tuning.
 
-Modes:
-  --mode concat   Concatenate SAM3 IDRs with AFP (default)
-  --mode replace  Replace AFP entirely with SAM3 IDRs
-
-Query source:
-  --sam3-cache-dir  Use pre-cached video queries from dataloader (F4)
-  --sam-checkpoint  Run SAM3 online per image (F1/F2/F3)
+Called by `run_with_hydra.py` when `run.task=finetune`. Handles both the
+pure-SAM3 path (encoder_owns_sam3=True — whole backbone is SAM3, iDisc-side
+modules train from scratch) and the legacy frozen-backbone path (only
+sam3_proj + ISD train). Supports single-frame and sequence (KITTISequenceDataset)
+data, per-param-group backbone LR, and the step-500 NaN guard for sequence clips
+with missing GT depth.
 """
 
 import argparse

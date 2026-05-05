@@ -195,41 +195,8 @@ def main(cfg: DictConfig) -> None:
                 metadata={"task": task, "exp_id": exp_id},
             )
 
-        elif task == "eval_sam":
-            from scripts.experiments.eval_sam import run_eval_sam
-
-            eval_cfg = {
-                "prompt_mode": runtime_cfg.get("prompt_mode", "none"),
-                "config_file": _resolve_path(runtime_cfg["dataset"]["legacy_config_path"]),
-                "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
-                "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
-                "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "output_dir": str(run_dir),
-                "config": runtime_cfg,
-            }
-            metrics = run_eval_sam(eval_cfg)
-            metrics_path = run_dir / "metrics.json"
-            if metrics_path.exists():
-                metrics_payload = _read_json(metrics_path)
-            else:
-                metrics_payload = metrics
-                _write_json(metrics_path, metrics_payload)
-
-            log_payload: dict[str, Any] = _flatten_dict(metrics_payload, "eval_sam")
-            log_payload["meta/git_branch"] = git_branch
-            log_payload["meta/git_commit"] = git_commit
-            log_metrics(log_payload)
-            log_summary(log_payload)
-
-            log_artifact(
-                run_dir,
-                name=f"{exp_id}-run-output",
-                artifact_type="run-output",
-                metadata={"task": task, "exp_id": exp_id},
-            )
-
         elif task == "finetune":
-            from scripts.experiments.finetune_sam import run_finetune
+            from scripts.experiments.finetune import run_finetune
 
             finetune_output = _resolve_path(runtime_cfg["finetune"]["output_dir"])
             finetune_cfg = {

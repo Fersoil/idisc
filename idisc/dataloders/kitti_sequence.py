@@ -60,6 +60,7 @@ class KITTISequenceDataset(Dataset):
         base_path,
         manifest_path,
         clip_length=4,
+        stride=None,
         depth_scale=256,
         crop="eigen",
         sam3_cache_dir=None,
@@ -69,6 +70,12 @@ class KITTISequenceDataset(Dataset):
         super().__init__()
         self.base_path = base_path
         self.clip_length = clip_length
+        # `stride` controls how far the sliding window advances between
+        # successive clips. stride=1 (legacy) makes consecutive clips share
+        # clip_length-1 frames; stride=clip_length makes clips disjoint.
+        # Disjoint clips reduce duplicate frame reads ~clip_length× and
+        # give cleaner per-epoch coverage.
+        self.stride = int(stride) if stride is not None else clip_length
         self.test_mode = test_mode
         self.depth_scale = depth_scale
         self.crop = crop
@@ -82,7 +89,7 @@ class KITTISequenceDataset(Dataset):
         self.clips = []
         for drive_key, meta in manifest.items():
             frames = meta.get(split_key, [])
-            for i in range(len(frames) - clip_length + 1):
+            for i in range(0, len(frames) - clip_length + 1, self.stride):
                 self.clips.append({
                     "drive_key": drive_key,
                     "date": meta["date"],
@@ -140,8 +147,11 @@ class KITTISequenceDataset(Dataset):
     def __getitem__(self, idx):
         clip = self.clips[idx]
         frame_indices = clip["frame_indices"]
-        drive_dir = os.path.dirname(os.path.dirname(clip["image_dir"]))
-        depth_dir = os.path.join(drive_dir, "proj_depth", "groundtruth", "image_02")
+        # KITTI image_dir is "<date>/<drive>/image_02/data"; the annotated
+        # depth lives at "<base>/<drive>/proj_depth/groundtruth/image_02/"
+        # — drive name only, no date prefix.
+        drive_name = clip["image_dir"].split("/")[1]
+        depth_dir = os.path.join(drive_name, "proj_depth", "groundtruth", "image_02")
 
         raws = []
         raw_depths = []

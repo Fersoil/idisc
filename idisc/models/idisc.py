@@ -67,24 +67,32 @@ class IDisc(nn.Module):
         sam_mode="concat",
         gt: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
+        pre_extracted_encoder_outputs: Optional[Tuple[torch.Tensor, ...]] = None,
     ):
         """
         Args:
-            instance_queries: SAM3 query embeddings (32, 256) for linear projection path
-            raw_idrs: Pre-computed IDR tuple for branch/replace bypass (skips AFP and sam3_proj)
-            sam_mode: "concat" = append SAM3 IDRs to AFP IDRs (default)
-                      "replace" = use SAM3 IDRs instead of AFP IDRs
+            instance_queries: SAM3 query embeddings (K, 256) for projection path
+            raw_idrs: Pre-computed IDR tuple (skips AFP and sam3_proj)
+            sam_mode: "concat", "replace", "translate", "random_idrs", "none"
+            pre_extracted_encoder_outputs: If provided, skip the pixel_encoder
+                call. Tuple of FPN feature maps (already in inverted order
+                matching what pixel_decoder expects). Used by the video encoder
+                training loop to avoid double-running the backbone.
         """
         losses = {"opt": {}, "stat": {}}
         original_shape = gt.shape[-2:] if gt is not None else image.shape[-2:]
 
-        encoder_outputs = self.pixel_encoder(image)
-        if getattr(self.pixel_encoder, "yields_instance_queries", False):
-            *encoder_outputs, encoder_queries = encoder_outputs
-            encoder_outputs = tuple(encoder_outputs)
-            if instance_queries is None:
-                instance_queries = encoder_queries
-        encoder_outputs = self.invert_encoder_output_order(encoder_outputs)
+        if pre_extracted_encoder_outputs is not None:
+            # Video encoder path: FPN already extracted outside this call.
+            encoder_outputs = pre_extracted_encoder_outputs
+        else:
+            encoder_outputs = self.pixel_encoder(image)
+            if getattr(self.pixel_encoder, "yields_instance_queries", False):
+                *encoder_outputs, encoder_queries = encoder_outputs
+                encoder_outputs = tuple(encoder_outputs)
+                if instance_queries is None:
+                    instance_queries = encoder_queries
+            encoder_outputs = self.invert_encoder_output_order(encoder_outputs)
 
         # DefAttn Decoder + filter useful resolutions (usually skip the lowest one)
         fpn_outputs, decoder_outputs = self.pixel_decoder(encoder_outputs)

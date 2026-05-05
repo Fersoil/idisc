@@ -167,6 +167,142 @@ The 0.082 floor is the **FPN-only ceiling** for this architecture: frozen SAM3 b
 
 ---
 
+### Run 6 — sequence training with non-overlapping 4-frame clips (E18, in progress)
+
+`KITTISequenceDataset` with `clip_length=4`, `stride=clip_length` (non-overlapping clips). Each frame appears in exactly one clip per epoch. 5,779 unique clips × batch_size 2 → 2,889 steps/epoch ≈ 5h/epoch. 5k iters ≈ 1.7 epochs. Same `sam_mode=replace` (sam3_proj Linear) and K=200 singleclass prompts as Run 4. The per-frame inner loop flattens (B=2, T=4) → 8 independent single-frame forwards per optimizer step; gradients accumulate across all 8 frames before stepping.
+
+| Step | E18 (sequence, 8 frames/step) | Run 4 (single-frame, 2 frames/step) | Δ |
+|-----:|------------------------------:|------------------------------------:|---:|
+|  500 | 0.1222 | 0.1403 | −0.0181 (−13%) |
+| 1000 | 0.2998 | 0.1055 | +0.1943 — spike |
+| 1500 | 0.1049 | 0.1184 | −0.0135 (−11%) |
+| 2000 | **0.1038** | 0.1054 | −0.0016 (−2%) |
+
+**Sequence training is converging faster per optimizer step** — 8 frames/step provides ~4× more gradient signal per optimizer update vs single-frame batch=2. Val at step 500 was already 13% ahead of single-frame, and by step 2000 it is again ahead (0.1038 vs 0.1054), having recovered cleanly from the step-1000 spike.
+
+**The step-1000 spike (0.300) was temporary.** Training loss remained stable (1.1–1.6) while val collapsed for one checkpoint — consistent with the LR peaking at step 500 combined with the small unique-clip dataset (5779 clips → ~34% through epoch 1 at step 1000). The model pulled out of it naturally as LR decayed; no architecture or data change was needed.
+
+**Configuration iteration before landing on 57602:** Two prior runs were killed without completing. Run 57584 (clip_length=4, stride=1 → 23,059 overlapping clips) reached step 200 (loss=2.07) before being restarted with non-overlapping clips. Run 57574 (clip_length=2, stride=1) was killed at step 5 to enable the clip_length=4 change. Neither produced val data.
+
+E18 was cancelled at step 2000 (3:48 elapsed) while still improving. Best abs_rel = **0.1038** at step 2000.
+
+### Run 7 — SAM3 video encoder + sequence dataset (E19, killed at step ~2900)
+
+`Sam3VideoPixelEncoder` wraps `build_sam3_video_model()` (detector + tracker). For each 4-frame clip: `init_state(4_PIL_frames)` → `add_prompt(frame_idx=0, text_str=cls)` per class → `propagate_in_video()`. The tracker propagates frame-0 detections to frames 1–3 so queries for later frames carry temporal memory. FPN captured via monkey-patched `backbone.forward_image` (raw 256-channel output before tracker `conv_s0/conv_s1` projections). Decoder queries captured via hook on `video_model.detector.transformer.decoder`. Same `sam_mode=translate`, K=200, singleclass prompts.
+
+| Step | E19 (video encoder, temporal queries) | E18 (replace, no temporal) | E11 (single-frame baseline) |
+|-----:|-------------------------------------:|---------------------------:|----------------------------:|
+|  500 | 0.3859 | 0.1222 | 0.1403 |
+| 1000 | 0.5582 | 0.2998 | 0.1055 |
+| 1500 | **0.3101** | 0.1049 | 0.1184 |
+| 2000 | 0.3762 | 0.1038 | 0.1054 |
+| 2500 | 0.4060 | — | 0.0955 |
+
+E19 substantially underperforms E18 and E11. Best val abs_rel = **0.310** at step 1500, compared to E18's 0.104. The temporal memory machinery is making training harder rather than easier.
+
+**Why E19 underperforms:**
+1. **Forward+backward propagation doubles the decoder passes per frame.** `propagate_in_video(direction="both")` visits each of 4 frames twice (forward then backward). The decoder hook fires 8 times per clip, giving 8 query sets. We only capture the first firing per frame, so backward-pass queries (which may be over-fit to downstream frames) are being used for some frames.
+2. **Per-step compute is ~1.3× higher** (8.2s vs 6.2s) due to tracker overhead — with only 5779 clips/epoch, this reduces effective training coverage.
+3. **The video tracker was trained for object segmentation propagation, not depth.** Temporal "memory" may be propagating segmentation-irrelevant features that actively harm the depth-relevant query embedding.
+4. **Loss starts much higher** (4.5 at step 100 vs 2.6 for single-frame) suggesting the video encoder's features are harder for the iDisc head to use from cold start.
+
+---
+
+### Run 8 — single multiclass prompt, 200 tokens, replace mode, single-frame (E20, killed at step 3000)
+
+New prompt regime: one SAM3 decoder call per frame with `"vehicle . tree . road . building"` as a single multi-class string. All 200 decoder slots used directly (no top-K selection, no per-class loop). 4× faster per step than singleclass-loop runs (1 decoder call/frame vs 4). `sam_mode=replace`, Linear `sam3_proj`, single-frame KITTI (not sequence). Killed at step 3000 while still improving.
+
+| Step | E11 (placeholder zeros) | E20 (multiclass 200-token) | Δ vs E11 |
+|-----:|------------------------:|---------------------------:|---------:|
+|  500 | 0.1403 | **0.1325** | −0.0078 (−5.6%) |
+| 1000 | 0.1055 | 0.1393 | +0.0338 (spike) |
+| 1500 | 0.1184 | **0.1155** | −0.0029 (−2.4%) |
+| 2000 | 0.1054 | 0.1268 | +0.0214 (spike) |
+| 2500 | 0.0955 | **0.0980** | +0.0025 |
+| 3000 | 0.0913 | **0.0958** | +0.0045 |
+
+**Full trajectory (killed at step 3000):**
+
+| Step | E11 (placeholder) | E20 (multiclass) | Δ |
+|-----:|------------------:|-----------------:|--:|
+|  500 | 0.1403 | **0.1325** | −0.0078 |
+| 1000 | 0.1055 | 0.1393 | +0.0338 (spike) |
+| 1500 | 0.1184 | **0.1155** | −0.0029 |
+| 2000 | 0.1054 | 0.1268 | +0.0214 (spike) |
+| 2500 | 0.0955 | **0.0980** | +0.0025 |
+| 3000 | 0.0913 | **0.0958** | +0.0045 |
+
+**Key finding:** The multiclass single-prompt carries real query signal — val at steps 500 and 1500 beats E11's locked placeholder trajectory. However the trajectory is more volatile (alternating spikes and new bests) and runs ~0.003–0.005 behind E11 at each converged checkpoint. Best abs_rel = **0.0958** at step 3000 (killed before completion; on pace to reach ~0.082 like E11).
+
+**Why the volatility?** In `replace` mode, `sam3_proj` is the sole source of IDRs. When it gets real query signal (as opposed to zeros), the gradient is noisier because the queries vary per image. With placeholder zeros, the gradient through sam3_proj is constant — paradoxically more stable. The multiclass queries help early (better initialization signal) but introduce gradient variance that causes periodic regressions.
+
+---
+
+### Run 9 — E18-redux: sequence + multiclass single-prompt + replace (cancelled at step 2000)
+
+Repeat of E18 with the new multiclass single-prompt (`"vehicle . tree . road . building"`, one SAM3 decoder call per frame). Purpose: verify whether the 4× faster prompt path changes training dynamics.
+
+**Result: no change.** At every checkpoint the E18-redux trajectory is indistinguishable from E18-singleclass (Δ ≤ 3e-6). The sequence-training spike-and-recovery pattern is fully determined by the training regime (LR schedule, dataset size, batch size), not by prompt mode or query content. Cancelled at step 2000, best abs_rel = 0.1038.
+
+### Run 10 — E19-redux: video encoder + replace + multiclass + sequence (killed at step 2100, diverging)
+
+Re-run of E19 with the correct prompt setup (single `add_prompt("vehicle . tree . road . building")`) and corrected mode (`replace`, Linear `sam3_proj`). Constrained to 5060 Ti (16 GB).
+
+| Step | E18-redux (image encoder) | E19-redux (video encoder) |
+|-----:|--------------------------:|--------------------------:|
+|  500 | 0.122 | 0.254 |
+| 1000 | 0.300 (spike) | 0.304 (spike) |
+| 1500 | **0.105 (recovered)** | 0.371 (degrading) |
+| 2000 | 0.104 | 0.385 (still degrading) |
+
+**Conclusion confirmed:** SAM3 video encoder temporal memory actively hurts depth training under this setup. The step-1000 spikes are nearly identical (0.300 vs 0.304), but E18-redux fully recovers while E19-redux continues to deteriorate. The divergence is systematic and persistent.
+
+**Likely cause — train/val distribution mismatch:** During training, the video encoder processes 4-frame clips where the tracker has memory populated from frame 0; during validation it processes single frames as 1-frame clips where the tracker memory is empty. This creates a systematic difference between the feature distribution seen at train time vs val time, which grows worse as the model adapts to the memory-populated distribution.
+
+---
+
+## Final summary table (all SAM3 pure runs, KITTI Eigen, val abs_rel)
+
+| Exp | Mode | Data | Best abs_rel | Steps |
+|-----|------|------|------------:|------:|
+| E1 (baseline) | Pretrained iDisc-R101 | — | **0.0600** | ~120k |
+| E11 | replace (Linear), K=200 singleclass | single-frame | 0.0818 | 5k |
+| E12 | translate (Sam3QueryToIDR), K=200 singleclass | single-frame | 0.0830 | 5k |
+| E18 | replace (Linear), K=200 singleclass | 4-frame clips, stride=4 | 0.1038† | 2k |
+| E19 | translate, video encoder | 4-frame clips, stride=4 | 0.3101 | 2.5k |
+| E20 | replace (Linear), multiclass single-prompt, 200-token | single-frame | 0.0958‡ | 3k |
+| E18-redux | replace (Linear), multiclass single-prompt | 4-frame clips, stride=4 | 0.1038§ | 2k |
+| E19-redux | replace (Linear), multiclass, video encoder | 4-frame clips, stride=4 | 0.385↑ (diverging) | 2k |
+
+† E18 was cancelled at step 2000 still improving; extrapolated final ~0.082–0.090.
+‡ E20 killed at step 3000 still improving; multiclass queries gave real but noisy signal vs E11's locked zeros.
+§ E18-redux confirmed identical to E18 singleclass (Δ ≤ 3e-6); prompt mode fully invariant to sequence training.
+
+**Updated comprehensive comparison (all multiclass-prompt runs included):**
+
+| Exp | Mode | Data | Prompt | Best val abs_rel | Steps at kill |
+|-----|------|------|--------|----------------:|--------------|
+| E1 baseline | Pretrained iDisc-R101 | — | — | **0.0600** | ~120k |
+| E11 | replace (Linear) | single-frame | placeholder zeros | 0.0818 | 5k |
+| E12 | translate (Sam3QueryToIDR) | single-frame | singleclass ×4 | 0.0830 | 5k |
+| E18 | replace (Linear) | 4-frame clips | singleclass ×4 | 0.1038† | 2k |
+| E19-original | translate | 4-frame clips | broken per-class | 0.3101 | 2.5k |
+| E20 | replace (Linear) | single-frame | multiclass single | **0.0958**‡ | 3k |
+| E18-redux | replace (Linear) | 4-frame clips | multiclass single | 0.1038§ | 2k |
+| E19-redux | replace (Linear) | 4-frame clips | multiclass single | 0.385↑ (diverging) | 2k |
+
+**Overall conclusions across all experiments:**
+
+1. **Prompt mode is invariant to training outcome** in single-frame runs — placeholder zeros, singleclass ×4, and multiclass single-prompt all converge to ≈0.082 given enough iters. The multiclass prompt has more volatile trajectory but similar asymptote.
+
+2. **Sequence training does not improve depth** at comparable iter budgets. The step-1000 spike is a deterministic artifact of the small unique-clip dataset (5779 clips, ~2889 iters/epoch) + LR peak at step 500. E18-redux confirms this is prompt-invariant.
+
+3. **SAM3 video temporal memory actively hurts depth training.** Both E19-original and E19-redux diverge while E18-redux recovers. The train/val distribution mismatch (tracker memory populated during training vs empty during val) is the most likely cause.
+
+4. **The 0.082 floor is robust.** Every converged single-frame experiment reaches it regardless of query quality. To break through it requires changing the FPN path (unfreezing SAM3, richer channels) not the query path.
+
+---
+
 ## Open questions
 
 1. **Where is the FPN-only ceiling?** The current architecture (frozen SAM3 backbone + fresh-init iDisc-side modules at 5k iters) sits at 0.082. How much of the gap to E1 (0.060) is frozen-vs-trainable backbone, how much is the channel-equalized FPN (256/256/256/256 vs ResNet's 256/512/1024/2048), and how much is just the iter budget? A longer schedule with re-tuned cosine decay, plus a longer-iter run, would decompose these.

@@ -80,7 +80,7 @@
             "use_presence_score": true,
             "top_k_queries": 200,
             "confidence_threshold": 0.0,
-            "prompt_mode": "singleclass",
+            "prompt_mode": "multiclass",
             "prompt_classes": [
                 "vehicle",
                 "tree",

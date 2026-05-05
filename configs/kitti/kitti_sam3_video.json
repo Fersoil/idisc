@@ -21,6 +21,8 @@
         "train_dataset": "KITTIDataset",
         "val_dataset": "KITTIDataset",
         "data_root": "datasets/kitti",
+        "manifest_path": "splits/kitti/sequence_manifest.json",
+        "clip_length": 4,
         "benchmark": false,
         "augmentations": {
             "horizontal_flip": 0.5,
@@ -72,7 +74,7 @@
                 1216,
                 352
             ],
-            "name": "sam3_image",
+            "name": "sam3_video",
             "lr_dedicated": 0.0,
             "sam_checkpoint": "/work/courses/3dv/team17/sam3_checkpoints/sam3.pt",
             "load_from_HF": false,
@@ -93,6 +95,10 @@
             "depths": 2,
             "latent_dim": 128,
             "num_latents": 32
+        },
+        "sam3_translate": {
+            "depths": 2,
+            "query_in_dim": 256
         }
     }
 }

@@ -113,3 +113,9 @@ def sam3_image(img_size, **kwargs):
     from idisc.models.sam3_encoder import Sam3PixelEncoder
 
     return Sam3PixelEncoder(img_size=img_size, **kwargs)
+
+
+def sam3_video(img_size, **kwargs):
+    from idisc.models.sam3_video_encoder import Sam3VideoPixelEncoder
+
+    return Sam3VideoPixelEncoder(img_size=img_size, **kwargs)

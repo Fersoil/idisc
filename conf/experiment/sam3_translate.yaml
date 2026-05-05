@@ -23,7 +23,7 @@ method:
   sam_mode: translate
   query_source: online
   prompt:
-    mode: singleclass
+    mode: multiclass
     classes: [vehicle, tree, road, building]
     use_bbox: false
     strategy: top_k_by_confidence

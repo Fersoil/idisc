@@ -1,0 +1,41 @@
+# @package _global_
+#
+# E18 — Pure SAM3 + iDisc d2c, Linear-projection mode + sequence dataset:
+#   - Same architecture as E11 (sam_mode=replace, sam3_proj single Linear).
+#   - Train data is `KITTISequenceDataset` (4-frame clips); the per-frame
+#     loop in finetune_sam.py flattens (B, T, ...) → (B*T, ...) so the
+#     existing d2c training pipeline handles it without changes.
+#   - val_dataset stays the standard KITTIDataset for apples-to-apples
+#     comparison against E11/E12 val abs_rel numbers.
+#   - Companion to E17 (translate-mode + sequence) — together they probe
+#     whether the sequence-data path interacts with the IDR architecture.
+
+defaults:
+  - override /dataset: kitti
+
+run:
+  exp_id: E18-sam3-pure-sequence
+  task: finetune
+  load_pretrained: false
+
+dataset:
+  legacy_config_path: configs/kitti/kitti_sam3_sequence.json
+
+method:
+  idr_source: afp
+  sam_mode: replace
+  query_source: online
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+    use_bbox: false
+    strategy: top_k_by_confidence
+
+finetune:
+  use_sequence_dataset: true
+
+tags:
+  - sam3-pure
+  - replace
+  - singleclass
+  - sequence

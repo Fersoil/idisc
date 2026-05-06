@@ -130,4 +130,8 @@ echo "Submitting: $EXPERIMENT ($HYDRA_EXP)"
 echo "  SLURM args: ${SBATCH_ARGS[*]}"
 echo "  Command:    $INNER_CMD"
 
-sbatch "${SBATCH_ARGS[@]}" --wrap="$WRAP_CMD"
+TMPSCRIPT=$(mktemp "${TMPDIR:-/tmp}/idisc_slurm_XXXXX.sh")
+printf '#!/bin/bash\n%s\n' "$WRAP_CMD" > "$TMPSCRIPT"
+chmod +x "$TMPSCRIPT"
+sbatch "${SBATCH_ARGS[@]}" "$TMPSCRIPT"
+rm -f "$TMPSCRIPT"

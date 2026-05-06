@@ -39,6 +39,16 @@ tail -f logs/<job_name>_<jobid>.out
 
 ### Run 1 — first end-to-end "pure SAM3" training
 
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` (Linear `sam3_proj`) |
+| Prompt | `"car . truck . person . bicycle . building . tree . road sign . pole"` (8-class multiclass) |
+| SAM3 calls/frame | 1 |
+| Tokens fed to model | **0 real** — 100% placeholder (all-zero 256-d vector). SAM3's `confidence_threshold=0.5` filtered everything; max score on KITTI was 0.017. See Run 2. |
+| Data | Single-frame KITTI, 23,158 train |
+| Trainable params | ~11.9M |
+| Change vs prior | First run; no prior. |
+
 5,000 iters, batch 2, lr 5e-5 cosine. Frozen SAM3 backbone, ~12M trainable iDisc-side params. SAM3 queries fed through `sam3_proj` (single Linear 256→128). `sam_mode=replace`: AFP bypassed, only `sam3_proj` queries reach ISD.
 
 **Final val abs_rel = 0.0818** (best was set on the *last* iteration).
@@ -74,6 +84,14 @@ Probed the trained encoder on 200 KITTI val images and counted how often the enc
 **Result: placeholder fired on 100% of images.** SAM3 was returning zero detections on every KITTI image with the production prompt, so the d2c bottleneck saw the same zero vector every batch through all 5k training steps of Run 1. Run 1's 0.0818 was a "FPN-features-only" floor — the query path was effectively dead.
 
 ### Run 3 — query path fixed; K=32 retrain
+
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` |
+| Prompt | `"car . truck . person . bicycle . building . tree . road sign . pole"` (multiclass) |
+| SAM3 calls/frame | 1 |
+| Tokens fed to model | **32** (top-32 decoder hidden states by score) |
+| Change vs Run 1 | Fixed encoder: hook on `transformer.decoder` + `confidence_threshold=0.0` → real queries instead of zeros |
 
 Routed queries directly from SAM3's transformer decoder (200 candidate slots × 256-d), top-K-selecting by score. Re-ran the 5k training. Killed early at step 1500 once it became clear the trajectory was tracking Run 1 exactly.
 
@@ -118,6 +136,14 @@ Ran SAM3 on 5 KITTI images across 18 prompt variants and recorded the max + mean
 
 ### Run 4 — K=200 with high-confidence singleclass prompts
 
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` |
+| Prompt | `"vehicle"`, `"tree"`, `"road"`, `"building"` — **4 separate SAM3 calls per frame** |
+| SAM3 calls/frame | 4 (one per class) |
+| Tokens fed to model | **200** (top-200 from 800 total candidates merged across 4 calls) |
+| Change vs Run 3 | Switched from 8-class multiclass (0.008 max score) to 4 singleclass calls (0.81 max score). Probe showed multiclass prompt collapses confidence 100×. |
+
 Switched to `prompt_mode=singleclass` over four high-yield single-word prompts (`vehicle`, `tree`, `road`, `building`), running SAM3 once per class and merging the top-200 by score across all four passes. Same 5k schedule, otherwise identical to Run 1 / Run 3.
 
 **Final val abs_rel = 0.0818** (effectively identical to Run 1).
@@ -138,6 +164,14 @@ Switched to `prompt_mode=singleclass` over four high-yield single-word prompts (
 Trajectories locked across all 10 validations.
 
 ### Run 5 — cross-attention translator (`Sam3QueryToIDR`)
+
+| Setting | Value |
+|---------|-------|
+| Mode | `translate` (Sam3QueryToIDR) |
+| Prompt | Singleclass × 4 (`vehicle`, `tree`, `road`, `building`) |
+| SAM3 calls/frame | 4 |
+| Tokens fed to model | **200** |
+| Change vs Run 4 | Replaced single-layer `sam3_proj` Linear with Sam3QueryToIDR: 32 learnable seed vectors cross-attending to the 200 SAM3 queries via 2-layer transformer. +707k trainable params. |
 
 Replaced the single `Linear(256, 128)` (`sam3_proj`) with a proper cross-attention pooling module: ~32 learnable IDR seeds × 128-d that cross-attend to all 200 SAM3 queries through 2 transformer-decoder layers. Mirrors AFP's design (learnable seeds → cross-attention to source → MLP, iterated), but with queries as the source instead of FPN features. New `sam_mode=translate` variant; AFP still bypassed. 5k iters, otherwise same config as Run 4. ~707k extra trainable params (12.58M total vs 11.88M for Run 4).
 
@@ -196,7 +230,16 @@ The 0.082 floor is the **FPN-only ceiling** for this architecture: frozen SAM3 b
 
 ---
 
-### Run 6 — sequence training with non-overlapping 4-frame clips (E18, in progress)
+### Run 6 — sequence training with non-overlapping 4-frame clips (E18)
+
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` |
+| Prompt | Singleclass × 4 (`vehicle`, `tree`, `road`, `building`) |
+| SAM3 calls/frame | 4 |
+| Tokens fed to model | **200** |
+| Data | `KITTISequenceDataset`, clip_length=4, stride=4 (non-overlapping), 5,779 unique clips |
+| Change vs Run 4 | Switched from single-frame (23,158 frames) to 4-frame clips; 8 frames/step instead of 2; same model. |
 
 `KITTISequenceDataset` with `clip_length=4`, `stride=clip_length` (non-overlapping clips). Each frame appears in exactly one clip per epoch. 5,779 unique clips × batch_size 2 → 2,889 steps/epoch ≈ 5h/epoch. 5k iters ≈ 1.7 epochs. Same `sam_mode=replace` (sam3_proj Linear) and K=200 singleclass prompts as Run 4. The per-frame inner loop flattens (B=2, T=4) → 8 independent single-frame forwards per optimizer step; gradients accumulate across all 8 frames before stepping.
 
@@ -216,6 +259,15 @@ The 0.082 floor is the **FPN-only ceiling** for this architecture: frozen SAM3 b
 E18 was cancelled at step 2000 (3:48 elapsed) while still improving. Best abs_rel = **0.1038** at step 2000.
 
 ### Run 7 — SAM3 video encoder + sequence dataset (E19, killed at step ~2900)
+
+| Setting | Value |
+|---------|-------|
+| Mode | `translate` (Sam3QueryToIDR) — later corrected to `replace` in E19-redux |
+| Prompt | Singleclass × 4 — **BROKEN**: per-class `add_prompt` loop overwrote each other; only "building" applied |
+| SAM3 calls/clip | 4 grounding calls (bug) + 3 tracker propagation steps |
+| Tokens fed to model | 200 (but derived from "building" prompt only) |
+| Data | clip=4, stride=4, 5779 clips |
+| Change vs Run 6 | Added `Sam3VideoPixelEncoder` (temporal tracker memory). Bug in prompt loop discovered post-hoc. |
 
 `Sam3VideoPixelEncoder` wraps `build_sam3_video_model()` (detector + tracker). For each 4-frame clip: `init_state(4_PIL_frames)` → `add_prompt(frame_idx=0, text_str=cls)` per class → `propagate_in_video()`. The tracker propagates frame-0 detections to frames 1–3 so queries for later frames carry temporal memory. FPN captured via monkey-patched `backbone.forward_image` (raw 256-channel output before tracker `conv_s0/conv_s1` projections). Decoder queries captured via hook on `video_model.detector.transformer.decoder`. Same `sam_mode=translate`, K=200, singleclass prompts.
 
@@ -238,6 +290,15 @@ E19 substantially underperforms E18 and E11. Best val abs_rel = **0.310** at ste
 ---
 
 ### Run 8 — single multiclass prompt, 200 tokens, replace mode, single-frame (E20, killed at step 3000)
+
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` |
+| Prompt | `"vehicle . tree . road . building"` — **1 SAM3 call per frame** |
+| SAM3 calls/frame | 1 |
+| Tokens fed to model | **200** (all 200 decoder slots, no top-K) |
+| Data | Single-frame, 23,158 train |
+| Change vs Run 4 | Collapsed 4 singleclass calls into 1 multiclass call. 4× faster per step. Scores lower (0.008 max vs 0.81) but all 200 tokens kept regardless. |
 
 New prompt regime: one SAM3 decoder call per frame with `"vehicle . tree . road . building"` as a single multi-class string. All 200 decoder slots used directly (no top-K selection, no per-class loop). 4× faster per step than singleclass-loop runs (1 decoder call/frame vs 4). `sam_mode=replace`, Linear `sam3_proj`, single-frame KITTI (not sequence). Killed at step 3000 while still improving.
 
@@ -269,11 +330,29 @@ New prompt regime: one SAM3 decoder call per frame with `"vehicle . tree . road 
 
 ### Run 9 — E18-redux: sequence + multiclass single-prompt + replace (cancelled at step 2000)
 
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` |
+| Prompt | `"vehicle . tree . road . building"` — 1 SAM3 call per frame |
+| SAM3 calls/frame | 1 |
+| Tokens | 200 |
+| Data | clip=4, stride=4, 5779 clips |
+| Change vs Run 6 | Prompt changed from singleclass ×4 to multiclass ×1. Everything else identical. |
+
 Repeat of E18 with the new multiclass single-prompt (`"vehicle . tree . road . building"`, one SAM3 decoder call per frame). Purpose: verify whether the 4× faster prompt path changes training dynamics.
 
 **Result: no change.** At every checkpoint the E18-redux trajectory is indistinguishable from E18-singleclass (Δ ≤ 3e-6). The sequence-training spike-and-recovery pattern is fully determined by the training regime (LR schedule, dataset size, batch size), not by prompt mode or query content. Cancelled at step 2000, best abs_rel = 0.1038.
 
 ### Run 10 — E19-redux: video encoder + replace + multiclass + sequence (killed at step 2100, diverging)
+
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` |
+| Prompt | `"vehicle . tree . road . building"` — **1 SAM3 call per clip** on frame 0; tracker propagates to frames 1–3 |
+| SAM3 calls/clip | 1 grounding + 3 tracker propagation steps |
+| Tokens | 200 per frame (via video propagation) |
+| Data | clip=4, stride=4, 5779 clips |
+| Change vs Run 7 | Fixed broken prompt loop (single call instead of 4 overwriting each other). Fixed mode to `replace` (Run 7 used `translate`). |
 
 Re-run of E19 with the correct prompt setup (single `add_prompt("vehicle . tree . road . building")`) and corrected mode (`replace`, Linear `sam3_proj`). Constrained to 5060 Ti (16 GB).
 
@@ -309,16 +388,16 @@ Re-run of E19 with the correct prompt setup (single `add_prompt("vehicle . tree 
 
 **Updated comprehensive comparison (all multiclass-prompt runs included):**
 
-| Exp | Mode | Data | Prompt | Best val abs_rel | Steps at kill |
-|-----|------|------|--------|----------------:|--------------|
-| E1 baseline | Pretrained iDisc-R101 | — | — | **0.0600** | ~120k |
-| E11 | replace (Linear) | single-frame | placeholder zeros | 0.0818 | 5k |
-| E12 | translate (Sam3QueryToIDR) | single-frame | singleclass ×4 | 0.0830 | 5k |
-| E18 | replace (Linear) | 4-frame clips | singleclass ×4 | 0.1038† | 2k |
-| E19-original | translate | 4-frame clips | broken per-class | 0.3101 | 2.5k |
-| E20 | replace (Linear) | single-frame | multiclass single | **0.0958**‡ | 3k |
-| E18-redux | replace (Linear) | 4-frame clips | multiclass single | 0.1038§ | 2k |
-| E19-redux | replace (Linear) | 4-frame clips | multiclass single | 0.385↑ (diverging) | 2k |
+| Exp | Mode | Tokens | SAM3 calls/frame | Prompt | Data | Best val abs_rel |
+|-----|------|-------:|----------------:|--------|------|----------------:|
+| E1 baseline | Pretrained iDisc-R101 | — | — | — | — | **0.0600** |
+| E11 | replace | **0** (placeholder) | 1 | multiclass 8-class (ineffective) | single-frame | 0.0818 |
+| E12 | translate | 200 | 4 | singleclass ×4 | single-frame | 0.0830 |
+| E18 | replace | 200 | 4 | singleclass ×4 | 4-frame clips | 0.1038† |
+| E19-original | translate | 200 | 4 (broken) | per-class loop (only "building" applied) | 4-frame clips | 0.3101 |
+| E20 | replace | **200** | **1** | multiclass single call | single-frame | 0.0958‡ |
+| E18-redux | replace | **200** | **1** | multiclass single call | 4-frame clips | 0.1038§ |
+| E19-redux | replace | **200** | **1**/clip | multiclass single call (fixed) | 4-frame clips | 0.385↑ |
 
 **Overall conclusions across all experiments:**
 

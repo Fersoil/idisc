@@ -6,13 +6,11 @@
 #   ./scripts/launch.sh <experiment> [-- <hydra_overrides...>]
 #
 # Experiments:
-#   baseline   – E1 iDisc-R101 pretrained baseline (eval)
-#   e11        – E11/E20 SAM3 pure, single-frame, replace mode
-#   e12        – E12 SAM3 translate (Sam3QueryToIDR), single-frame
-#   e17        – E17 SAM3 translate + 4-frame sequence
-#   e18        – E18 SAM3 pure + 4-frame sequence
-#   e19        – E19 SAM3 video encoder + 4-frame sequence  (needs 16 GB GPU)
-#   cache      – Pre-compute SAM3 video queries for KITTI sequences
+#   baseline    – E1  iDisc-R101 pretrained baseline (eval)
+#   e11         – E11 SAM3 pure replace, single-frame
+#   e12         – E12 SAM3 translate (Sam3QueryToIDR), single-frame
+#   e13         – E13 SAM3 pure replace, 4-frame sequence
+#   e14         – E14 SAM3 video encoder, 4-frame sequence  (needs 16 GB GPU)
 #
 # Examples:
 #   ./scripts/launch.sh e11
@@ -26,7 +24,7 @@ EXPERIMENT="${1:-}"
 
 if [[ -z "$EXPERIMENT" ]]; then
     echo "Usage: $0 <experiment> [-- <hydra_overrides...>]" >&2
-    echo "Experiments: baseline e11 e12 e17 e18 e19 cache" >&2
+    echo "Experiments: baseline e11 e12 e13 e14" >&2
     exit 1
 fi
 
@@ -46,45 +44,33 @@ case "$EXPERIMENT" in
         TIME="2:00:00"
         CONSTRAINT=""
         ;;
-    e11|e20)
-        JOB_NAME="iDisc-sam3-pure"
+    e11)
+        JOB_NAME="iDisc-e11-pure"
         HYDRA_EXP="sam3_pure"
         TIME="2:00:00"
         CONSTRAINT=""
         ;;
     e12)
-        JOB_NAME="iDisc-sam3-translate"
+        JOB_NAME="iDisc-e12-translate"
         HYDRA_EXP="sam3_translate"
         TIME="2:00:00"
         CONSTRAINT=""
         ;;
-    e17)
-        JOB_NAME="iDisc-sam3-translate-seq"
-        HYDRA_EXP="sam3_translate_sequence"
-        TIME="14:00:00"
-        CONSTRAINT=""
-        ;;
-    e18)
-        JOB_NAME="iDisc-sam3-pure-seq"
+    e13)
+        JOB_NAME="iDisc-e13-pure-seq"
         HYDRA_EXP="sam3_pure_sequence"
         TIME="10:00:00"
         CONSTRAINT=""
         ;;
-    e19)
-        JOB_NAME="iDisc-sam3-video-seq"
+    e14)
+        JOB_NAME="iDisc-e14-video-seq"
         HYDRA_EXP="sam3_video_sequence"
         TIME="14:00:00"
         CONSTRAINT="--constraint=5060ti"
         ;;
-    cache)
-        JOB_NAME="iDisc-sam3-cache"
-        HYDRA_EXP=""
-        TIME="4:00:00"
-        CONSTRAINT=""
-        ;;
     *)
         echo "Unknown experiment: $EXPERIMENT" >&2
-        echo "Valid: baseline e11 e12 e17 e18 e19 cache" >&2
+        echo "Valid: baseline e11 e12 e13 e14" >&2
         exit 1
         ;;
 esac
@@ -92,15 +78,11 @@ esac
 mkdir -p "$IDISC_REPO/logs"
 
 # Build the inner command that SLURM will execute
-if [[ "$EXPERIMENT" == "cache" ]]; then
-    INNER_CMD="python -u scripts/data/cache_sam3_video.py"
-else
-    OVERRIDE_STR=""
-    if [[ ${#OVERRIDES[@]} -gt 0 ]]; then
-        OVERRIDE_STR=" ${OVERRIDES[*]}"
-    fi
-    INNER_CMD="python -u scripts/run_with_hydra.py experiment=${HYDRA_EXP}${OVERRIDE_STR}"
+OVERRIDE_STR=""
+if [[ ${#OVERRIDES[@]} -gt 0 ]]; then
+    OVERRIDE_STR=" ${OVERRIDES[*]}"
 fi
+INNER_CMD="python -u scripts/run_with_hydra.py experiment=${HYDRA_EXP}${OVERRIDE_STR}"
 
 WRAP_CMD="set -euo pipefail
 . /etc/profile.d/modules.sh

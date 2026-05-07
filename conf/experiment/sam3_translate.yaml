@@ -11,7 +11,7 @@ defaults:
   - override /dataset: kitti
 
 run:
-  exp_id: E12-sam3-translate
+  exp_id: E12-online-sam3-translate
   task: finetune
   load_pretrained: false
 
@@ -21,7 +21,6 @@ dataset:
 method:
   idr_source: afp
   sam_mode: translate
-  query_source: online
   prompt:
     mode: multiclass
     classes: [vehicle, tree, road, building]

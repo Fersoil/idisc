@@ -160,7 +160,7 @@ def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
         return "replace"
     if variant == "sam-translate":
         return "translate"
-    if variant in {"sam-concat", "sam-cached-video", "concat", "replace"}:
+    if variant in {"sam-concat", "concat", "replace"}:
         return "concat" if variant != "replace" else "replace"
 
     raise ValueError(f"Cannot infer finetune mode from variant={variant!r}")
@@ -175,14 +175,13 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     sam_mode = _resolve_finetune_mode(cfg)
     prompt_mode = cfg.get("prompt_mode", "multiclass")
     sam_checkpoint = cfg.get("sam_checkpoint")
-    sam3_cache_dir = cfg.get("sam3_cache_dir")
 
     encoder_name = config["model"]["pixel_encoder"].get("name", "")
     encoder_owns_sam3 = encoder_name in ("sam3_image", "sam3_video")
     encoder_is_video = encoder_name == "sam3_video"
 
-    if not encoder_owns_sam3 and sam_checkpoint is None and sam3_cache_dir is None:
-        raise ValueError("Either sam_checkpoint or sam3_cache_dir is required")
+    if not encoder_owns_sam3 and sam_checkpoint is None:
+        raise ValueError("sam_checkpoint is required for non-SAM3-encoder variants")
 
     if cfg.get("use_sequence_dataset"):
         config["data"]["train_dataset"] = "KITTISequenceDataset"
@@ -235,8 +234,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     print(f"Mode: {sam_mode}", flush=True)
     if use_online_sam:
         print(f"Prompt: {prompt_mode}", flush=True)
-    else:
-        print(f"Cache: {sam3_cache_dir}", flush=True)
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}", flush=True)
 
@@ -275,7 +272,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     print(f"  Trainable params: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)", flush=True)
 
     # Datasets
-    cache_dir = sam3_cache_dir if not use_online_sam else None
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     print(f"Loading data from {data_path}...", flush=True)
     train_dataset = getattr(custom_dataset, config["data"]["train_dataset"])(
@@ -283,7 +279,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
         base_path=data_path,
         crop=config["data"].get("crop"),
         augmentations_db=config["data"].get("augmentations", {}),
-        sam3_cache_dir=cache_dir,
         manifest_path=config["data"].get("manifest_path"),
         clip_length=config["data"].get("clip_length", 4),
         stride=config["data"].get("stride"),
@@ -292,7 +287,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
         test_mode=True,
         base_path=data_path,
         crop=config["data"].get("crop"),
-        sam3_cache_dir=cache_dir,
         manifest_path=config["data"].get("manifest_path"),
         clip_length=config["data"].get("clip_length", 4),
         stride=config["data"].get("stride"),
@@ -542,9 +536,7 @@ def _parse_args() -> argparse.Namespace:
                         choices=["multiclass", "singleclass"],
                         help="Text prompt strategy for online SAM3")
     parser.add_argument("--sam-checkpoint", type=str, default=None,
-                        help="SAM3 checkpoint for online inference (F1/F2/F3)")
-    parser.add_argument("--sam3-cache-dir", type=str, default=None,
-                        help="Directory with pre-cached SAM3 video queries (F4)")
+                        help="SAM3 checkpoint for online inference")
     parser.add_argument("--output-dir", type=str, default="finetune_output")
     parser.add_argument("--n-iters", type=int, default=5000)
     parser.add_argument("--lr", type=float, default=5e-5)
@@ -568,7 +560,6 @@ def main():
             "mode": args.mode,
             "prompt_mode": args.prompt_mode,
             "sam_checkpoint": args.sam_checkpoint,
-            "sam3_cache_dir": args.sam3_cache_dir,
             "output_dir": args.output_dir,
             "n_iters": args.n_iters,
             "lr": args.lr,

@@ -64,8 +64,6 @@ def build_runtime_config(
     method_cfg = runtime.get("method", {})
     idr_source = method_cfg.get("idr_source", "afp")
     sam_mode = method_cfg.get("sam_mode", "none")
-    query_source = method_cfg.get("query_source", "online")
-
     variant_key = (idr_source, sam_mode)
     if variant_key not in IDR_SOURCE_AND_MODE_TO_VARIANT:
         raise ValueError(f"Unknown idr_source/sam_mode combination: {variant_key}")
@@ -87,12 +85,6 @@ def build_runtime_config(
     # Keep method.prompt_mode aligned for any downstream code that reads it.
     runtime.setdefault("method", {})
     runtime["method"]["prompt_mode"] = prompt_mode
-
-    if query_source == "cached":
-        runtime["sam3_cache_dir"] = runtime.get("paths", {}).get("sam3_cache_dir")
-        runtime["variant"] = "sam-cached-video"
-    else:
-        runtime["sam3_cache_dir"] = None
 
     return runtime
 

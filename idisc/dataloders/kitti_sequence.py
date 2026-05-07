@@ -63,8 +63,6 @@ class KITTISequenceDataset(Dataset):
         stride=None,
         depth_scale=256,
         crop="eigen",
-        sam3_cache_dir=None,
-        sam3_top_k=32,
         **kwargs,
     ):
         super().__init__()
@@ -79,8 +77,6 @@ class KITTISequenceDataset(Dataset):
         self.test_mode = test_mode
         self.depth_scale = depth_scale
         self.crop = crop
-        self.sam3_cache_dir = sam3_cache_dir
-        self.sam3_top_k = sam3_top_k
 
         with open(manifest_path) as f:
             manifest = json.load(f)
@@ -215,24 +211,5 @@ class KITTISequenceDataset(Dataset):
             "sequence_id": clip["drive_key"],
             "camera_intrinsics": clip_intrinsics,
         }
-
-        if self.sam3_cache_dir:
-            drive_name = clip["image_dir"].split("/")[1]  # e.g. 2011_09_26_drive_0001_sync
-            clip_queries = []
-            for fi in frame_indices:
-                cache_path = os.path.join(self.sam3_cache_dir, drive_name, f"{fi:010d}.pt")
-                if os.path.isfile(cache_path):
-                    q = torch.load(cache_path, weights_only=True).float()
-                    if self.sam3_top_k and q.shape[0] > self.sam3_top_k:
-                        _, top_idx = q.norm(dim=-1).topk(self.sam3_top_k)
-                        q = q[top_idx]
-                    clip_queries.append(q)
-
-            if len(clip_queries) == len(frame_indices):
-                sample["sam3_queries"] = torch.stack(clip_queries)  # (T, K, D)
-            else:
-                sample["sam3_queries"] = torch.zeros(0)
-        else:
-            sample["sam3_queries"] = torch.zeros(0)
 
         return sample

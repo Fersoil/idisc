@@ -66,8 +66,6 @@ class KITTIDataset(BaseDataset):
         benchmark=False,
         augmentations_db={},
         normalize=True,
-        sam3_cache_dir=None,
-        sam3_top_k=32,
         **kwargs,
     ):
         super().__init__(test_mode, base_path, benchmark, normalize)
@@ -77,8 +75,6 @@ class KITTIDataset(BaseDataset):
         self.is_dense = is_dense
         self.height = 352
         self.width = 1216
-        self.sam3_cache_dir = sam3_cache_dir
-        self.sam3_top_k = sam3_top_k
 
         # load annotations
         self.load_dataset()
@@ -111,14 +107,6 @@ class KITTIDataset(BaseDataset):
                 img_info["camera_intrinsics"] = self.CAM_INTRINSIC[
                     img_name.split("/")[0]
                 ][:, :3]
-
-                if self.sam3_cache_dir:
-                    m = self._EIGEN_PATH_RE.match(img_name)
-                    if m:
-                        drive, frame_str = m.group(2), m.group(3)
-                        img_info["sam3_cache_path"] = os.path.join(
-                            self.sam3_cache_dir, drive, f"{int(frame_str):010d}.pt"
-                        )
 
                 self.dataset.append(img_info)
 
@@ -157,20 +145,7 @@ class KITTIDataset(BaseDataset):
         info["camera_intrinsics"] = self.dataset[idx]["camera_intrinsics"].clone()
         image, gts, info = self.transform(image=image, gts={"depth": depth}, info=info)
 
-        sample = {"image": image, "gt": gts["gt"], "mask": gts["mask"]}
-
-        cache_path = self.dataset[idx].get("sam3_cache_path")
-        if cache_path and os.path.isfile(cache_path):
-            queries = torch.load(cache_path, weights_only=True).float()
-            if self.sam3_top_k and queries.shape[0] > self.sam3_top_k:
-                norms = queries.norm(dim=-1)
-                _, top_idx = norms.topk(self.sam3_top_k)
-                queries = queries[top_idx]
-            sample["sam3_queries"] = queries
-        else:
-            sample["sam3_queries"] = torch.zeros(0)
-
-        return sample
+        return {"image": image, "gt": gts["gt"], "mask": gts["mask"]}
 
     def get_pointcloud_mask(self, shape):
         if self.crop is None:

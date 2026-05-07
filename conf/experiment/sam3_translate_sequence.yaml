@@ -22,7 +22,6 @@ dataset:
 method:
   idr_source: afp
   sam_mode: translate
-  query_source: online
   prompt:
     mode: multiclass
     classes: [vehicle, tree, road, building]

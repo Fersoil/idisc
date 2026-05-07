@@ -17,7 +17,8 @@ Use the unified launcher from the repo root:
 | Key | Experiment | Output dir | Val metric | When to kill |
 |-----|-----------|-----------|-----------|--------------|
 | `baseline` | E1 iDisc-R101 pretrained (eval) | `outputs/runs/…E1…/metrics.json` | abs\_rel | n/a (eval only) |
-| `e11` | E11/E20 SAM3 pure, single-frame | `finetune_output/E20-sam3-pure-multiclass/` | abs\_rel | step 5000 (~2h) or if plateau visible at step 3000 |
+| `e11` | E11/E20 SAM3 pure, single-frame, cached queries | `finetune_output/E20-sam3-pure-multiclass/` | abs\_rel | step 5000 (~2h) or if plateau visible at step 3000 |
+| `e20-online` | E20-online SAM3 pure, single-frame, live SAM3 | `finetune_output/E20-online-sam3-pure/` | abs\_rel | step 5000 (~4h); compare trajectory to e11 |
 | `e12` | E12 SAM3 translate (Sam3QueryToIDR) | `finetune_output/E12-sam3-translate/` | abs\_rel | step 5000 (~2h) |
 | `e18` | E18 SAM3 pure + 4-frame sequence | `finetune_output/E18-sam3-pure-sequence/` | abs\_rel | step 5000 (~5h); expect spike at step 1000 then recovery |
 | `e19` | E19 SAM3 video encoder + sequence | `finetune_output/E19-sam3-video-sequence/` | abs\_rel | kill if val keeps rising after step 1000 (seen to diverge) |
@@ -45,6 +46,7 @@ tail -f logs/<job_name>_<jobid>.out
 | Prompt | `"car . truck . person . bicycle . building . tree . road sign . pole"` (8-class multiclass) |
 | SAM3 calls/frame | 1 |
 | Tokens fed to model | **0 real** — 100% placeholder (all-zero 256-d vector). SAM3's `confidence_threshold=0.5` filtered everything; max score on KITTI was 0.017. See Run 2. |
+| Queries | **cached** (precomputed April 10, `.pt` files loaded at train time) |
 | Data | Single-frame KITTI, 23,158 train |
 | Trainable params | ~11.9M |
 | Change vs prior | First run; no prior. |
@@ -91,6 +93,7 @@ Probed the trained encoder on 200 KITTI val images and counted how often the enc
 | Prompt | `"car . truck . person . bicycle . building . tree . road sign . pole"` (multiclass) |
 | SAM3 calls/frame | 1 |
 | Tokens fed to model | **32** (top-32 decoder hidden states by score) |
+| Queries | **cached** |
 | Change vs Run 1 | Fixed encoder: hook on `transformer.decoder` + `confidence_threshold=0.0` → real queries instead of zeros |
 
 Routed queries directly from SAM3's transformer decoder (200 candidate slots × 256-d), top-K-selecting by score. Re-ran the 5k training. Killed early at step 1500 once it became clear the trajectory was tracking Run 1 exactly.
@@ -142,6 +145,7 @@ Ran SAM3 on 5 KITTI images across 18 prompt variants and recorded the max + mean
 | Prompt | `"vehicle"`, `"tree"`, `"road"`, `"building"` — **4 separate SAM3 calls per frame** |
 | SAM3 calls/frame | 4 (one per class) |
 | Tokens fed to model | **200** (top-200 from 800 total candidates merged across 4 calls) |
+| Queries | **cached** |
 | Change vs Run 3 | Switched from 8-class multiclass (0.008 max score) to 4 singleclass calls (0.81 max score). Probe showed multiclass prompt collapses confidence 100×. |
 
 Switched to `prompt_mode=singleclass` over four high-yield single-word prompts (`vehicle`, `tree`, `road`, `building`), running SAM3 once per class and merging the top-200 by score across all four passes. Same 5k schedule, otherwise identical to Run 1 / Run 3.
@@ -171,6 +175,7 @@ Trajectories locked across all 10 validations.
 | Prompt | Singleclass × 4 (`vehicle`, `tree`, `road`, `building`) |
 | SAM3 calls/frame | 4 |
 | Tokens fed to model | **200** |
+| Queries | **cached** |
 | Change vs Run 4 | Replaced single-layer `sam3_proj` Linear with Sam3QueryToIDR: 32 learnable seed vectors cross-attending to the 200 SAM3 queries via 2-layer transformer. +707k trainable params. |
 
 Replaced the single `Linear(256, 128)` (`sam3_proj`) with a proper cross-attention pooling module: ~32 learnable IDR seeds × 128-d that cross-attend to all 200 SAM3 queries through 2 transformer-decoder layers. Mirrors AFP's design (learnable seeds → cross-attention to source → MLP, iterated), but with queries as the source instead of FPN features. New `sam_mode=translate` variant; AFP still bypassed. 5k iters, otherwise same config as Run 4. ~707k extra trainable params (12.58M total vs 11.88M for Run 4).
@@ -238,6 +243,7 @@ The 0.082 floor is the **FPN-only ceiling** for this architecture: frozen SAM3 b
 | Prompt | Singleclass × 4 (`vehicle`, `tree`, `road`, `building`) |
 | SAM3 calls/frame | 4 |
 | Tokens fed to model | **200** |
+| Queries | **FPN live** (Sam3PixelEncoder runs every step); **IDR queries cached** (batch `.pt` files passed as `instance_queries`, overriding encoder_queries in idisc.py:98) |
 | Data | `KITTISequenceDataset`, clip_length=4, stride=4 (non-overlapping), 5,779 unique clips |
 | Change vs Run 4 | Switched from single-frame (23,158 frames) to 4-frame clips; 8 frames/step instead of 2; same model. |
 
@@ -266,6 +272,7 @@ E18 was cancelled at step 2000 (3:48 elapsed) while still improving. Best abs_re
 | Prompt | Singleclass × 4 — **BROKEN**: per-class `add_prompt` loop overwrote each other; only "building" applied |
 | SAM3 calls/clip | 4 grounding calls (bug) + 3 tracker propagation steps |
 | Tokens fed to model | 200 (but derived from "building" prompt only) |
+| Queries | **FPN + IDR queries both live** — video encoder branch calls `model.pixel_encoder(clip)` for the full clip and uses `queries_T[t]` directly; `batch["sam3_queries"]` (cache) is never read |
 | Data | clip=4, stride=4, 5779 clips |
 | Change vs Run 6 | Added `Sam3VideoPixelEncoder` (temporal tracker memory). Bug in prompt loop discovered post-hoc. |
 
@@ -297,6 +304,7 @@ E19 substantially underperforms E18 and E11. Best val abs_rel = **0.310** at ste
 | Prompt | `"vehicle . tree . road . building"` — **1 SAM3 call per frame** |
 | SAM3 calls/frame | 1 |
 | Tokens fed to model | **200** (all 200 decoder slots, no top-K) |
+| Queries | **cached** |
 | Data | Single-frame, 23,158 train |
 | Change vs Run 4 | Collapsed 4 singleclass calls into 1 multiclass call. 4× faster per step. Scores lower (0.008 max vs 0.81) but all 200 tokens kept regardless. |
 
@@ -336,6 +344,7 @@ New prompt regime: one SAM3 decoder call per frame with `"vehicle . tree . road 
 | Prompt | `"vehicle . tree . road . building"` — 1 SAM3 call per frame |
 | SAM3 calls/frame | 1 |
 | Tokens | 200 |
+| Queries | **FPN live; IDR queries cached** (same split as Run 6) |
 | Data | clip=4, stride=4, 5779 clips |
 | Change vs Run 6 | Prompt changed from singleclass ×4 to multiclass ×1. Everything else identical. |
 
@@ -351,6 +360,7 @@ Repeat of E18 with the new multiclass single-prompt (`"vehicle . tree . road . b
 | Prompt | `"vehicle . tree . road . building"` — **1 SAM3 call per clip** on frame 0; tracker propagates to frames 1–3 |
 | SAM3 calls/clip | 1 grounding + 3 tracker propagation steps |
 | Tokens | 200 per frame (via video propagation) |
+| Queries | **FPN + IDR queries both live** — video encoder branch calls `model.pixel_encoder(clip)` for the full clip and uses `queries_T[t]` directly; `batch["sam3_queries"]` (cache) is never read |
 | Data | clip=4, stride=4, 5779 clips |
 | Change vs Run 7 | Fixed broken prompt loop (single call instead of 4 overwriting each other). Fixed mode to `replace` (Run 7 used `translate`). |
 
@@ -366,6 +376,24 @@ Re-run of E19 with the correct prompt setup (single `add_prompt("vehicle . tree 
 **Conclusion confirmed:** SAM3 video encoder temporal memory actively hurts depth training under this setup. The step-1000 spikes are nearly identical (0.300 vs 0.304), but E18-redux fully recovers while E19-redux continues to deteriorate. The divergence is systematic and persistent.
 
 **Likely cause — train/val distribution mismatch:** During training, the video encoder processes 4-frame clips where the tracker has memory populated from frame 0; during validation it processes single frames as 1-frame clips where the tracker memory is empty. This creates a systematic difference between the feature distribution seen at train time vs val time, which grows worse as the model adapts to the memory-populated distribution.
+
+---
+
+### Run 11 — E20-online: live SAM3 inference vs cached control
+
+| Setting | Value |
+|---------|-------|
+| Mode | `replace` (Linear `sam3_proj`) |
+| Prompt | `"vehicle . tree . road . building"` — 1 SAM3 call per frame, live inference |
+| SAM3 calls/frame | 1 (grounding + detection, no cache) |
+| Tokens | 200 per frame |
+| Queries | **live** (`query_source: online`) |
+| Data | Single-frame KITTI Eigen, 23,158 train |
+| Change vs Run 8 (E20) | `query_source: online` — SAM3 forward runs at every training step instead of loading `.pt` files from disk |
+
+**Purpose:** All prior experiments silently used cached queries (see post-hoc finding below). This run establishes whether live SAM3 inference during training produces different dynamics or a different abs\_rel floor compared to the precomputed cache. Expected outcome: identical convergence — the cache captures the same distribution as live inference. If they diverge, it indicates the cache was built with different prompt settings than the training configs.
+
+**Result:** *in progress* (job 60077, step 500/5000 as of 2026-05-06)
 
 ---
 
@@ -408,6 +436,16 @@ Re-run of E19 with the correct prompt setup (single `add_prompt("vehicle . tree 
 3. **SAM3 video temporal memory actively hurts depth training.** Both E19-original and E19-redux diverge while E18-redux recovers. The train/val distribution mismatch (tracker memory populated during training vs empty during val) is the most likely cause.
 
 4. **The 0.082 floor is robust.** Every converged single-frame experiment reaches it regardless of query quality. To break through it requires changing the FPN path (unfreezing SAM3, richer channels) not the query path.
+
+---
+
+## Post-hoc finding: all experiments used cached queries (discovered 2026-05-06)
+
+**Summary:** Despite all experiment configs having `query_source: online`, every run from E11 through E20 silently used pre-cached SAM3 queries loaded from disk. Live SAM3 inference never ran during training for any of these experiments.
+
+**Root cause:** A bug in `run_with_hydra.py` — both the `eval` and `finetune` task branches built the `sam3_cache_dir` parameter by reading directly from `runtime_cfg["paths"]["sam3_cache_dir"]` (always the cluster path `/work/courses/3dv/team17/sam3_cache`) instead of using `runtime_cfg["sam3_cache_dir"]`, the top-level field that `config_bridge` sets to `None` when `query_source != "cached"`. As a result, the dataloader always received the cache path, and since the cache files existed for all 23,810 train+val frames, every batch loaded precomputed `[200, 256]` float16 tensors rather than running SAM3 forward.
+
+**Cache provenance:** The cache at `/work/courses/3dv/team17/sam3_cache` was built on 2026-04-10 to 2026-04-11 (23,855 `.pt` files covering all KITTI Eigen frames). All E11–E21 experiments ran from 2026-05-02 onward, so the cache predates every experiment.
 
 ---
 

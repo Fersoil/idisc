@@ -155,7 +155,6 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
                 "output_dir": str(run_dir),
                 "config": runtime_cfg,
                 "load_pretrained": runtime_cfg.get("run", {}).get("load_pretrained", True),
@@ -205,7 +204,6 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
                 "use_sequence_dataset": runtime_cfg.get("finetune", {}).get("use_sequence_dataset", False),
                 "config": runtime_cfg,
                 "load_pretrained": runtime_cfg.get("run", {}).get("load_pretrained", True),
@@ -232,39 +230,9 @@ def main(cfg: DictConfig) -> None:
                 metadata={"task": task, "exp_id": exp_id},
             )
 
-        elif task == "cache":
-            from scripts.data.cache_sam3_video import run_cache
-
-            default_manifest = REPO_ROOT / "splits" / "kitti" / "sequence_manifest.json"
-            base_path = _resolve_path(runtime_cfg["paths"]["base_path"]) or str(REPO_ROOT)
-            default_kitti_root = Path(base_path) / "datasets" / "kitti"
-            cache_cfg = {
-                "manifest": _resolve_path(runtime_cfg["paths"].get("sequence_manifest")) or str(default_manifest),
-                "kitti_root": _resolve_path(runtime_cfg["paths"].get("kitti_root")) or str(default_kitti_root),
-                "cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
-                "checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "top_k": runtime_cfg["paths"].get("sam3_top_k", 32),
-                "start_idx": runtime_cfg.get("cache", {}).get("start_idx", 0),
-            }
-            summary = run_cache(cache_cfg)
-            _write_json(run_dir / "metrics.json", summary)
-            log_payload = {
-                "meta/git_branch": git_branch,
-                "meta/git_commit": git_commit,
-                "cache/total_cached": summary.get("total_cached", 0),
-            }
-            log_metrics(log_payload)
-            log_summary(log_payload)
-            log_artifact(
-                run_dir,
-                name=f"{exp_id}-run-output",
-                artifact_type="cache-output",
-                metadata={"task": task, "exp_id": exp_id},
-            )
-
         else:
             raise ValueError(
-                f"Unknown task: {task!r}. Valid values: eval | eval_sam | finetune | cache"
+                f"Unknown task: {task!r}. Valid values: eval | finetune"
             )
 
     print("Run complete.")

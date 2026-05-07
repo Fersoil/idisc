@@ -9,7 +9,7 @@ defaults:
   - override /dataset: kitti
 
 run:
-  exp_id: E20-sam3-pure-multiclass
+  exp_id: E11-online-sam3-pure
   task: finetune
   load_pretrained: false
 
@@ -19,7 +19,6 @@ dataset:
 method:
   idr_source: afp
   sam_mode: replace
-  query_source: online
   prompt:
     mode: multiclass
     classes: [vehicle, tree, road, building]
@@ -31,7 +30,7 @@ finetune:
   lr: 5.0e-5
   val_interval: 500
   batch_size: 2
-  output_dir: finetune_output/E20-sam3-pure-multiclass
+  output_dir: finetune_output/E11-online-sam3-pure
 
 tags:
   - sam3-pure

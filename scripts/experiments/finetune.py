@@ -17,6 +17,12 @@ import random
 from time import time
 from typing import Any
 
+try:
+    import wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -77,8 +83,8 @@ def _flatten_sequence_batch(batch, device):
     images = batch["images"].to(device)
     B, T = images.shape[:2]
     data = images.view(B * T, *images.shape[2:])
-    gt = batch["depths"].to(device).view(B * T, *batch["depths"].shape[2:])
-    mask = batch["masks"].to(device).view(B * T, *batch["masks"].shape[2:])
+    gt = batch["gt"].to(device).view(B * T, *batch["gt"].shape[2:])
+    mask = batch["mask"].to(device).view(B * T, *batch["mask"].shape[2:])
     q = batch.get("sam3_queries")
     sam3_q = (
         q.to(device).view(B * T, q.shape[2], q.shape[3])
@@ -189,6 +195,32 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     batch_size = int(finetune_cfg.get("batch_size", cfg.get("batch_size", 2)))
 
     use_online_sam = sam_checkpoint is not None and not encoder_owns_sam3
+
+    _finetune_wandb_cfg = {
+        "sam_mode": sam_mode,
+        "prompt_mode": prompt_mode,
+        "encoder_owns_sam3": encoder_owns_sam3,
+        "n_iters": n_iters,
+        "lr": lr,
+        "batch_size": batch_size,
+        "val_interval": val_interval,
+        "output_dir": output_dir,
+        "use_sequence_dataset": cfg.get("use_sequence_dataset", False),
+    }
+    use_wandb = _WANDB_AVAILABLE and cfg.get("use_wandb", True)
+    _wandb_run_owned = False
+    if use_wandb:
+        if wandb.run is not None:
+            # Already initialised by run_with_hydra tracked_run — just patch config.
+            wandb.config.update({"finetune": _finetune_wandb_cfg}, allow_val_change=True)
+        else:
+            wandb.init(
+                project=cfg.get("wandb_project", "idisc-finetune"),
+                name=cfg.get("wandb_name"),
+                tags=cfg.get("wandb_tags"),
+                config={**config, "finetune": _finetune_wandb_cfg},
+            )
+            _wandb_run_owned = True
 
     seed = config["generic"]["seed"]
     random.seed(seed)
@@ -419,6 +451,9 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                     f"lr={lr_now:.2e} | [{format_seconds(elapsed)}<{format_seconds(eta)}]",
                     flush=True,
                 )
+            
+                if use_wandb and wandb.run is not None:
+                    wandb.log({"train/loss": total_loss, "train/lr": lr_now}, step=step)
 
             if step % val_interval == 0 or step == n_iters:
                 print(f"\n  Validation at step {step}...", flush=True)
@@ -448,6 +483,8 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 print(f"  abs_rel={abs_rel:.6f}  (best={best_abs_rel:.6f})", flush=True)
                 for k, v in sorted(metrics.items()):
                     print(f"    {k}: {v:.6f}", flush=True)
+                if use_wandb and wandb.run is not None:
+                    wandb.log({f"val/{k}": v for k, v in metrics.items()}, step=step)
 
                 # Drop frozen SAM3 weights from checkpoints — they're reloaded
                 # from sam_checkpoint at startup, so persisting them per-save
@@ -465,6 +502,8 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                     ckpt_path = os.path.join(output_dir, "best_sam_finetuned.pt")
                     torch.save(_trainable_state_dict(), ckpt_path)
                     print(f"  New best! Saved to {ckpt_path}", flush=True)
+                    if use_wandb and wandb.run is not None:
+                        wandb.log({"val/best_abs_rel": best_abs_rel}, step=step)
 
                 ckpt_path = os.path.join(output_dir, f"checkpoint_step{step}.pt")
                 torch.save(_trainable_state_dict(), ckpt_path)
@@ -480,6 +519,8 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     torch.save(final_sd, final_path)
     print(f"\nFine-tuning complete. Final model saved to {final_path}", flush=True)
     print(f"Best abs_rel: {best_abs_rel:.6f}", flush=True)
+    if use_wandb and _wandb_run_owned:
+        wandb.finish()
 
     return {
         "best_abs_rel": float(best_abs_rel),
@@ -511,6 +552,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--use-sequence-dataset", action="store_true",
                         help="Override config to use KITTISequenceDataset for training")
+    parser.add_argument("--no-wandb", action="store_true", help="Disable wandb logging")
+    parser.add_argument("--wandb-project", type=str, default="idisc-finetune")
+    parser.add_argument("--wandb-name", type=str, default=None)
     return parser.parse_args()
 
 
@@ -531,6 +575,9 @@ def main():
             "val_interval": args.val_interval,
             "batch_size": args.batch_size,
             "use_sequence_dataset": args.use_sequence_dataset,
+            "use_wandb": not args.no_wandb,
+            "wandb_project": args.wandb_project,
+            "wandb_name": args.wandb_name,
         }
     )
 

@@ -6,3 +6,4 @@ kitti_root: /work/courses/3dv/team17/idisc/datasets/kitti
 sequence_manifest: splits/kitti/sequence_manifest.json
 sam3_top_k: 32
 outputs_root: outputs/runs
+finetuning_dir: /work/courses/3dv/team17/idisc/finetuning

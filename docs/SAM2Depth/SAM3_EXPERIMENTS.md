@@ -140,7 +140,18 @@ Killed at step 4700; best checkpoint at step 4500. ~7.8 min/500 steps on RTX 506
 | Queries | **live** (video encoder branch always was live; unchanged) |
 | Data | `KITTISequenceDataset`, clip=4, stride=4, 5,779 clips |
 
-**Result:** *not yet run*
+**Validation on sequential KITTI**
+
+Killed at step 3400; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060 Ti.
+
+| Step | abs_rel | d1 | rmse |
+|-----:|--------:|---:|-----:|
+|500|0.312|0.648|7.340|
+|1000|0.233|0.709|6.638|
+|1500|0.251|0.705|6.674|
+|2000|0.231|0.699|6.709|
+|2500|0.223|0.706|6.690|
+|3000|**0.222**|0.682|6.852|
 
 ---
 

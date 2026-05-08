@@ -142,8 +142,6 @@ Killed at step 4700; best checkpoint at step 4500. ~7.8 min/500 steps on RTX 506
 
 **Validation on sequential KITTI**
 
-Killed at step 3400; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060 Ti.
-
 | Step | abs_rel | d1 | rmse |
 |-----:|--------:|---:|-----:|
 |500|0.312|0.648|7.340|
@@ -152,6 +150,21 @@ Killed at step 3400; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060
 |2000|0.231|0.699|6.709|
 |2500|0.223|0.706|6.690|
 |3000|**0.222**|0.682|6.852|
+
+Killed at step 3400; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060 Ti.
+
+**Validation on non-sequential KITTI**
+
+| Step | abs_rel | d1 | rmse |
+|-----:|--------:|---:|-----:|
+|500|0.270|0.664|6.988|
+|1000|0.268|0.690|6.230|
+|1500|0.202|0.747|5.584|
+|2000|0.179|0.766|5.355|
+|2500|0.171|0.777|5.082|
+|3000|**0.161**|0.753|5.231|
+
+Killed at step 3000; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060 Ti.
 
 ---
 

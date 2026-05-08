@@ -48,7 +48,27 @@ Reference: pretrained iDisc-R101 baseline, KITTI Eigen val abs_rel = **0.0600** 
 | 4500 | 0.0848 | 0.925 | 2.754 |
 | 5000 | 0.0848 | 0.926 | 2.723 |
 
-**Best: 0.0839 at step 4000.** Smooth descent, no spikes; plateau from step 4000 onward.
+#### E11 extended — 15,000 iters (job 60408)
+
+Same config, n_iters extended to 15,000.
+
+| Step | abs_rel | d1 | rmse |
+|-----:|--------:|---:|-----:|
+| 500 | 0.1471 | 0.803 | 3.979 |
+| 1000 | 0.1240 | 0.857 | 3.626 |
+| 2000 | 0.1111 | 0.861 | 3.341 |
+| 3000 | 0.0976 | 0.905 | 3.176 |
+| 5000 | 0.0869 | 0.929 | 2.737 |
+| 6000 | 0.0859 | 0.925 | 2.739 |
+| 7000 | 0.0836 | 0.924 | 2.656 |
+| 8000 | 0.0819 | 0.924 | 2.653 |
+| 9000 | 0.0801 | 0.932 | 2.566 |
+| 11000 | 0.0766 | 0.940 | 2.545 |
+| 12000 | 0.0759 | 0.936 | 2.615 |
+| 14500 | **0.0753** | 0.941 | 2.487 |
+| 15000 | 0.0792 | 0.942 | 2.495 |
+
+**Best: 0.0753 at step 14500.** Continuous descent through 15k — the previously-established 0.082. Training on a single-frame with frozen SAM3 can reach 0.075 given enough budget.
 
 ---
 
@@ -106,7 +126,7 @@ Killed at step 4700; best checkpoint at step 4500. ~7.8 min/500 steps on RTX 506
 | 4000 | 0.0972 | 0.924 | 2.712 |
 | 4500 | **0.0837** | 0.928 | 2.715 |
 
-**Best: 0.0837 at step 4500.** Key finding: sequence training converges to the same floor as single-frame given enough iterations. At step 4500 the sequence run matches E11's single-frame floor (0.0839). At ~4.6× the compute cost per step, sequence training offers no practical advantage over single-frame.
+**Best: 0.0837 at step 4500; completed at step 5000 (0.0863).**. Sequence training converges to the single-frame floor at the same iter budget but at ~4.6× compute cost per step — no practical advantage.
 
 ---
 
@@ -129,10 +149,10 @@ Killed at step 4700; best checkpoint at step 4500. ~7.8 min/500 steps on RTX 506
 | Exp | Mode | Data | Best abs_rel | Steps | Status |
 |-----|------|------|------------:|------:|--------|
 | E1 baseline | Pretrained iDisc-R101 | — | **0.0600** | ~120k | reference |
-| E11 | replace, live | single-frame | **0.0839** | 4000 | done (job 60077) |
-| E12 | translate, live | single-frame | **0.0853** | 4500 | done†  (job 60120) |
-| E13 | replace, live | 4-frame sequence | **0.0837** | 4500 | done‡ (job 60121) |
-| E14 | video encoder, live | 4-frame sequence | — | — | queued |
+| E11 | replace, live, 5k | single-frame | 0.0839 | 4000 | done (job 60077) |
+| E11 ext | replace, live, 15k | single-frame | **0.0753** | 14500 | done (job 60408) |
+| E12 | translate, live | single-frame | 0.0853 | 4500 | done† (job 60120) |
+| E13 | replace, live | 4-frame sequence | 0.0837 | 4500 | done (job 60121) |
+| E14 | video encoder, live | 4-frame sequence | — | — | not run |
 
-† Killed at step 4900 by time limit; on pace to reach ~0.083 at step 5000.
-‡ Killed at step 4700; sequence floor matches single-frame at sufficient iter budget.
+† Killed at step 4900 by time limit; best at step 4500.

@@ -149,6 +149,70 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
     metrics_tracker.reset_metrics()
     return metrics
 
+def validate_model_sequential(model, valid_loader, context, device, sam_mode="concat"):
+    metrics_tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
+
+    for i, batch in enumerate(valid_loader):
+        images = batch["images"].to(device)  # (B, T, 3, H, W)
+        depths = batch["depths"].to(device)  # (B, T, 1, H, W)
+        masks  = batch["masks"].to(device)   # (B, T, 1, H, W)
+        B, T = images.shape[:2]
+        n_samples = B * T
+        
+        batch_preds = []
+        batch_masks = []
+        batch_depths = []
+        for b in range(B):
+            clip = images[b]   # (T, 3, H, W)
+            # encoder.forward(clip) → (*FPN_T, queries_T)
+            enc_out = model.pixel_encoder(clip)
+            # Last element is queries (T, K, 256); rest are FPN levels
+            fpn_levels = enc_out[:-1]      # each (T, C, h, w)
+            queries_T  = enc_out[-1]       # (T, K, 256)
+
+            for t in range(T):
+                gt_t   = depths[b, t : t + 1]     # (1, 1, H, W)
+                mask_t = masks[b, t : t + 1]      # (1, 1, H, W)
+                if mask_t.bool().sum() == 0:
+                    continue
+
+                frame_fpn = tuple(
+                    lvl[t : t + 1] for lvl in fpn_levels
+                )
+                inv_frame_fpn = tuple(reversed(frame_fpn))
+
+                iq = queries_T[t]   # (K, 256)
+
+                with context:
+                    pred, _, _ = model(
+                        images[b, t : t + 1],  # still needed for shape
+                        instance_queries=iq,
+                        sam_mode=sam_mode,
+                        pre_extracted_encoder_outputs=inv_frame_fpn,
+                        gt=gt_t,
+                        mask=mask_t,
+                    )
+                batch_preds.append(pred)
+                batch_masks.append(mask_t)
+                batch_depths.append(gt_t)
+                
+        if len(batch_preds):                    # sometimes all from batch have zero masks
+            preds = torch.cat(batch_preds, dim=0)
+            valid_masks = torch.cat(batch_masks, dim=0)
+            valid_depths = torch.cat(batch_depths, dim=0)
+            metrics_tracker.accumulate_metrics(
+                valid_depths.permute(0, 2, 3, 1),
+                preds.permute(0, 2, 3, 1),
+                valid_masks.permute(0, 2, 3, 1),
+            )
+
+        if (i + 1) % 100 == 0:
+            print(f"  Val seq: {i+1}/{len(valid_loader)}", flush=True)
+
+    metrics = metrics_tracker.get_metrics()
+    metrics_tracker.reset_metrics()
+    return metrics
+
 
 def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
     mode = cfg.get("mode")
@@ -185,6 +249,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
 
     if cfg.get("use_sequence_dataset"):
         config["data"]["train_dataset"] = "KITTISequenceDataset"
+        config["data"]["val_dataset"] = "KITTISequenceDataset"
 
     finetune_cfg = cfg.get("finetune", {})
     output_dir = finetune_cfg.get("output_dir", cfg.get("output_dir", "finetune_output"))
@@ -453,7 +518,10 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 print(f"\n  Validation at step {step}...", flush=True)
                 model.eval()
                 with torch.no_grad():
-                    metrics = validate_model(model, valid_loader, context, device,
+                    if cfg.get("use_sequence_dataset"):
+                        metrics = validate_model_sequential(model, valid_loader, context, device, sam_mode=sam_mode)
+                    else:
+                        metrics = validate_model(model, valid_loader, context, device,
                                              sam_mode=sam_mode, sam_proc=sam_proc,
                                              prompt_mode=prompt_mode if use_online_sam else None)
                 model.train()

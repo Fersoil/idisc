@@ -451,11 +451,11 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                                 gt=gt_t,
                                 mask=mask_t,
                             )
-                            loss = sum(v for v in losses["opt"].values()) / n_samples
+                            loss = sum(v for v in losses["opt"].values()) # / n_samples
 
-                        loss.backward()
-                        total_loss += loss.item()
+                        total_loss += loss
                         valid_frames += 1
+
             else:
                 # Standard (image-encoder) path.
                 data, gt, mask, sam3_q, n_samples = _unpack_batch(batch, device)
@@ -487,14 +487,17 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                             gt=gt[idx:idx + 1],
                             mask=mask[idx:idx + 1],
                         )
-                        loss = sum(v for v in losses["opt"].values()) / n_samples
+                        loss = sum(v for v in losses["opt"].values()) # / n_samples
 
-                    loss.backward()
-                    total_loss += loss.item()
+                    total_loss += loss
                     valid_frames += 1
+
 
             if valid_frames == 0:
                 continue
+
+            total_loss = total_loss / valid_frames
+            total_loss.backward()
 
             nn.utils.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()

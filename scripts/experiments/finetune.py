@@ -453,8 +453,20 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                             )
                             loss = sum(v for v in losses["opt"].values()) # / n_samples
 
-                        total_loss += loss
+                        loss.backward()
+                        frame_loss = loss.item()
+
+                        if use_wandb and wandb.run is not None:
+                            lr_now = scheduler.get_last_lr()[0]
+                            wandb.log({"train_video/loss": frame_loss, "train_video/lr": lr_now}, step=step)
+
+                        total_loss += frame_loss
                         valid_frames += 1
+
+                if valid_frames == 0:
+                    continue
+
+                total_loss /= valid_frames 
 
             else:
                 # Standard (image-encoder) path.
@@ -492,12 +504,14 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                     total_loss += loss
                     valid_frames += 1
 
+                if valid_frames == 0:
+                    continue
 
-            if valid_frames == 0:
-                continue
+                mean_loss = total_loss / valid_frames
+                mean_loss.backward()
 
-            total_loss = total_loss / valid_frames
-            total_loss.backward()
+                total_loss = mean_loss.item()
+
 
             nn.utils.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()

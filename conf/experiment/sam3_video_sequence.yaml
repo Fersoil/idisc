@@ -25,7 +25,7 @@ method:
     mode: multiclass
     classes: [vehicle, tree, road, building]
     use_bbox: false
-    strategy: top_k_by_confidence
+    strategy: all
 
 finetune:
   use_sequence_dataset: true

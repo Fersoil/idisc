@@ -45,7 +45,6 @@ class Sam3VideoPixelEncoder(nn.Module):
         prompt_classes: Optional[Sequence[str]] = None,
         freeze_sam3: bool = True,
         load_from_HF: Optional[bool] = None,
-        top_k_queries: int = 32,
         confidence_threshold: float = 0.0,
         **kwargs,
     ):
@@ -56,8 +55,8 @@ class Sam3VideoPixelEncoder(nn.Module):
         )
         self.prompt_mode = prompt_mode
         self.prompt_classes = list(prompt_classes) if prompt_classes else []
-        self.top_k_queries: int = int(top_k_queries)
         self.confidence_threshold = float(confidence_threshold)
+        self._num_queries: Optional[int] = None  # inferred on first hook fire
 
         if not self.prompt_classes:
             raise ValueError(
@@ -229,14 +228,12 @@ class Sam3VideoPixelEncoder(nn.Module):
                         resized.append(feat)
                     per_frame_fpn[frame_idx] = resized
 
-                # 2. Capture queries from hook (fired during detector
+                # 2. Capture all queries from hook (fired during detector
                 #    forward inside propagate_in_video).
                 if self._last_hook_hs is not None:
-                    hs = self._last_hook_hs
-                    k = min(self.top_k_queries, hs.shape[0])
-                    norms = hs.float().norm(dim=-1)
-                    _, top_idx = norms.topk(k)
-                    per_frame_queries[frame_idx] = hs[top_idx].float()
+                    hs = self._last_hook_hs.float()
+                    self._num_queries = hs.shape[0]
+                    per_frame_queries[frame_idx] = hs
                     self._last_hook_hs = None
 
         # Stack into (T, ...) tensors.
@@ -245,9 +242,8 @@ class Sam3VideoPixelEncoder(nn.Module):
             torch.zeros(1, 256, *target_sizes[i], device=clip.device)
             for i in range(n_levels)
         ]
-        placeholder_q = torch.zeros(
-            1, self.top_k_queries, 256, device=clip.device
-        )
+        num_q = self._num_queries or 200
+        placeholder_q = torch.zeros(1, num_q, 256, device=clip.device)
 
         stacked_fpn = []
         for lvl_i in range(n_levels):

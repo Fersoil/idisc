@@ -220,7 +220,6 @@ class IDisc(nn.Module):
             "freeze_sam3",
             "load_from_HF",
             "use_presence_score",
-            "top_k_queries",
             "confidence_threshold",
         ):
             if extra_key in config["model"]["pixel_encoder"]:

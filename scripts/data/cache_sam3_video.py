@@ -4,16 +4,15 @@ Cache SAM3 video hidden states for KITTI Eigen split sequences.
 
 For each drive sequence:
   1. Run SAM3 video predictor with tracking
-  2. Extract last-layer decoder queries (hs[-1]) per frame
-  3. Save top-K queries to disk as .pt files
+  2. Extract last-layer decoder queries (hs[-1]) per frame — all slots
+  3. Save queries to disk as .pt files
 
 Usage:
   python scripts/cache_sam3_video.py \
     --manifest splits/kitti/sequence_manifest.json \
     --kitti-root /work/courses/3dv/team17/idisc/datasets/kitti \
     --cache-dir /work/courses/3dv/team17/sam3_cache \
-    --checkpoint /work/courses/3dv/team17/sam3_checkpoints/sam3.pt \
-    --top-k 32
+    --checkpoint /work/courses/3dv/team17/sam3_checkpoints/sam3.pt
 """
 
 import argparse
@@ -41,28 +40,23 @@ def propagate_and_collect(predictor, session_id):
     return dict(predictor.hidden_states)
 
 
-def extract_top_k_queries(hs_tensor, top_k=32):
-    """Extract top-K queries from hs[-1] based on L2 norm as a proxy for activation strength.
+def extract_all_queries(hs_tensor):
+    """Extract all queries from hs[-1] (last decoder layer).
 
     Args:
         hs_tensor: shape (num_layers, batch, num_queries, d_model)
-        top_k: number of queries to keep
 
     Returns:
-        Tensor of shape (top_k, d_model) in float16 for storage efficiency.
+        Tensor of shape (num_queries, d_model) in float16 for storage efficiency.
     """
     last_layer = hs_tensor[-1]  # (batch, num_queries, d_model)
     if last_layer.dim() == 3:
         last_layer = last_layer.squeeze(0)  # (num_queries, d_model)
-
-    k = min(top_k, last_layer.shape[0])
-    norms = last_layer.norm(dim=-1)
-    _, top_indices = norms.topk(k)
-    return last_layer[top_indices].half().cpu()
+    return last_layer.half().cpu()
 
 
 def _run_chunk(predictor, pil_images, local_to_global, frames_to_cache,
-               seq_cache_dir, top_k):
+               seq_cache_dir):
     """Run SAM3 video predictor on a chunk of PIL images.
 
     Args:
@@ -70,7 +64,6 @@ def _run_chunk(predictor, pil_images, local_to_global, frames_to_cache,
         local_to_global: dict mapping local chunk index -> global frame number
         frames_to_cache: set of global frame indices we need
         seq_cache_dir: output directory
-        top_k: queries per frame
 
     Returns:
         Number of frames cached from this chunk.
@@ -98,7 +91,7 @@ def _run_chunk(predictor, pil_images, local_to_global, frames_to_cache,
         if global_idx is not None and global_idx in frames_to_cache:
             out_path = os.path.join(seq_cache_dir, f"{global_idx:010d}.pt")
             if not os.path.exists(out_path):
-                queries = extract_top_k_queries(hs, top_k=top_k)
+                queries = extract_all_queries(hs)
                 torch.save(queries, out_path)
                 cached_count += 1
 
@@ -111,7 +104,7 @@ def _run_chunk(predictor, pil_images, local_to_global, frames_to_cache,
     return cached_count
 
 
-def process_sequence(predictor, seq_key, seq_info, kitti_root, cache_dir, top_k):
+def process_sequence(predictor, seq_key, seq_info, kitti_root, cache_dir):
     """Process one drive sequence through SAM3 video predictor, chunked for memory."""
     image_dir = os.path.join(kitti_root, seq_info["image_dir"])
     if not os.path.isdir(image_dir):
@@ -169,7 +162,7 @@ def process_sequence(predictor, seq_key, seq_info, kitti_root, cache_dir, top_k)
               f"(global frames {g_start}-{g_end})...", flush=True)
 
         n = _run_chunk(predictor, pil_images, local_to_global, frames_to_cache,
-                       seq_cache_dir, top_k)
+                       seq_cache_dir)
         total_cached += n
 
         # Close PIL images
@@ -202,7 +195,6 @@ def run_cache(cfg: dict[str, Any]) -> dict[str, Any]:
     total_cached = 0
     seq_keys = sorted(manifest.keys())
     start_idx = int(cfg.get("start_idx", 0))
-    top_k = int(cfg.get("top_k", 32))
     for i, seq_key in enumerate(seq_keys):
         if i < start_idx:
             continue
@@ -214,7 +206,6 @@ def run_cache(cfg: dict[str, Any]) -> dict[str, Any]:
             seq_info,
             cfg["kitti_root"],
             cfg["cache_dir"],
-            top_k,
         )
         total_cached += n
 
@@ -233,8 +224,6 @@ def _parse_args() -> argparse.Namespace:
                         help="Output directory for cached queries")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="SAM3 checkpoint path")
-    parser.add_argument("--top-k", type=int, default=32,
-                        help="Number of queries to keep per frame")
     parser.add_argument("--start-idx", type=int, default=0,
                         help="Start from this sequence index (for resuming)")
     return parser.parse_args()
@@ -248,7 +237,6 @@ def main():
             "kitti_root": args.kitti_root,
             "cache_dir": args.cache_dir,
             "checkpoint": args.checkpoint,
-            "top_k": args.top_k,
             "start_idx": args.start_idx,
         }
     )

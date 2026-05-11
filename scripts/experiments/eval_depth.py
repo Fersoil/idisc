@@ -87,22 +87,15 @@ def get_sam_queries_proj(processor, raw_img, prompt_mode):
 
         elif prompt_mode == "singleclass":
             all_queries = []
-            all_scores = []
             for cls in KITTI_CLASSES:
                 processor.reset_all_prompts(state)
                 processor.set_text_prompt(prompt=cls, state=state)
                 iq = state.get("instance_queries")
-                tk = state.get("topk_scores")
                 if iq is not None and iq.shape[0] > 0:
                     all_queries.append(iq)
-                    all_scores.append(tk)
             if not all_queries:
                 return None
-            all_queries = torch.cat(all_queries, dim=0)
-            all_scores = torch.cat(all_scores, dim=0)
-            top_k = min(processor.top_k_queries, all_queries.shape[0])
-            _, best_idx = all_scores.topk(top_k)
-            return all_queries[best_idx].float().clone()
+            return torch.cat(all_queries, dim=0).float().clone()
 
         else:  # empty
             processor.set_text_prompt(prompt="", state=state)

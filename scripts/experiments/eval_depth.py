@@ -223,12 +223,22 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
                 images = batch["images"].to(device)
                 depths = batch["depths"].to(device)
                 masks = batch["masks"].to(device)
-                t = images.shape[1] - 1
-                data = images[0,t].unsqueeze(0)
-                gt = depths[0,t].unsqueeze(0)``
-                mask = masks[0,t].unsqueeze(0)
-                if mask.sum() == 0:
+                B, T = images.shape[:2]
+                frames = []
+                for b in range(B):
+                    for t in range(T):
+                        gt_t   = depths[b, t:t+1]
+                        mask_t = masks[b, t:t+1]
+                        if mask_t.bool().sum() == 0:
+                            continue
+                        data_t = images[b, t:t+1]
+                        frames.append((data_t, gt_t, mask_t))
+                if not frames:
                     continue
+                data = torch.cat([d for (d, _, _) in frames], dim=0)
+                gt   = torch.cat([g for (_, g, _) in frames], dim=0)
+                mask = torch.cat([m for (_, _, m) in frames], dim=0)
+
             # Determine what to pass to model
             instance_queries = None
             raw_idrs = None

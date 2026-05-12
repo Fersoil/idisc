@@ -248,3 +248,98 @@ class AFP(nn.Module):
             activation=config["model"]["activation"],
         )
         return obj
+
+
+class Sam3QueryToIDR(nn.Module):
+    """Translate SAM3 instance queries (B, K_in, query_in_dim) into iDisc
+    IDRs (B, num_latents, latent_dim) via cross-attention from learnable
+    seeds. Mirrors AFP's algorithm but operates on segmentation queries
+    instead of FPN features (no positional encoding — the input has no
+    spatial structure)."""
+
+    def __init__(
+        self,
+        num_resolutions: int,
+        depth: int = 2,
+        query_in_dim: int = 256,
+        latent_dim: int = 128,
+        num_latents: int = 32,
+        num_heads: int = 4,
+        activation: str = "silu",
+        norm: str = "torchLN",
+        expansion: int = 2,
+    ):
+        super().__init__()
+        self.num_resolutions = num_resolutions
+        self.iters = depth
+        self.num_slots = num_latents
+        self.latent_dim = latent_dim
+        self.query_in_dim = query_in_dim
+
+        bottleneck_dim = expansion * latent_dim
+        for i in range(num_resolutions):
+            setattr(
+                self,
+                f"kv_proj_{i+1}",
+                nn.Linear(query_in_dim, latent_dim),
+            )
+            setattr(
+                self,
+                f"mu_{i+1}",
+                nn.Parameter(torch.randn(1, num_latents, latent_dim)),
+            )
+            setattr(
+                self,
+                f"cross_attn_{i+1}_d{1}",
+                AttentionLayer(
+                    sink_dim=latent_dim,
+                    hidden_dim=latent_dim,
+                    source_dim=latent_dim,
+                    output_dim=latent_dim,
+                    num_heads=num_heads,
+                    dropout=0.0,
+                    pre_norm=True,
+                    sink_competition=True,
+                ),
+            )
+            setattr(
+                self,
+                f"mlp_cross_{i+1}_d{1}",
+                nn.Sequential(
+                    get_norm(norm, latent_dim),
+                    nn.Linear(latent_dim, bottleneck_dim),
+                    _get_activation_cls(activation),
+                    nn.Linear(bottleneck_dim, latent_dim),
+                ),
+            )
+
+    def forward(self, queries: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        # queries: (B, K_in, query_in_dim)
+        b = queries.shape[0]
+        idrs = []
+        for i in range(self.num_resolutions):
+            kv = getattr(self, f"kv_proj_{i+1}")(queries)  # (B, K_in, latent_dim)
+            mu = getattr(self, f"mu_{i+1}").expand(b, -1, -1)  # (B, num_latents, latent_dim)
+            x = mu
+            for _ in range(self.iters):
+                x = x + getattr(self, f"cross_attn_{i+1}_d{1}")(x.clone(), kv)
+                x = x + getattr(self, f"mlp_cross_{i+1}_d{1}")(x.clone())
+            idrs.append(x)
+        return tuple(idrs)
+
+    @classmethod
+    def build(cls, config):
+        # Match ISD's num_resolutions, not AFP's (which skips low-res levels).
+        # ISD expects one IDR set per resolution it has heads for.
+        translate_cfg = config["model"].get("sam3_translate", {})
+        obj = cls(
+            num_resolutions=config["model"]["isd"]["num_resolutions"],
+            depth=translate_cfg.get("depths", config["model"]["afp"]["depths"]),
+            query_in_dim=translate_cfg.get("query_in_dim", 256),
+            num_latents=config["model"]["afp"]["num_latents"],
+            latent_dim=config["model"]["afp"]["latent_dim"],
+            num_heads=config["model"]["num_heads"],
+            expansion=config["model"]["expansion"],
+            activation=config["model"]["activation"],
+        )
+        return obj

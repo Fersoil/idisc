@@ -4,9 +4,9 @@
     },
     "training": {
         "n_iters": 40000,
-        "batch_size": 2,    
+        "batch_size": 2,
         "validation_interval": 200,
-        "nsteps_accumulation_gradient": 2,
+        "nsteps_accumulation_gradient": 4,
         "lr": 0.0002,
         "wd": 0.05,
         "div_factor": 1,
@@ -21,8 +21,6 @@
         "train_dataset": "KITTIDataset",
         "val_dataset": "KITTIDataset",
         "data_root": "datasets/kitti",
-        "manifest_path": "splits/kitti/sequence_manifest.json",
-        "clip_length": 4,
         "benchmark": false,
         "augmentations": {
             "horizontal_flip": 0.5,
@@ -74,14 +72,31 @@
                 1216,
                 352
             ],
-            "name": "resnet101",
-            "lr_dedicated": 5e-05
+            "name": "sam3_image",
+            "lr_dedicated": 0.0,
+            "sam_checkpoint": "/work/courses/3dv/team17/sam3_checkpoints/sam3.pt",
+            "load_from_HF": false,
+            "freeze_sam3": true,
+            "use_presence_score": true,
+            "top_k_queries": 200,
+            "confidence_threshold": 0.0,
+            "prompt_mode": "multiclass",
+            "prompt_classes": [
+                "vehicle",
+                "tree",
+                "road",
+                "building"
+            ]
         },
         "afp": {
             "context_low_resolutions_skip": 1,
             "depths": 2,
             "latent_dim": 128,
             "num_latents": 32
+        },
+        "sam3_translate": {
+            "depths": 2,
+            "query_in_dim": 256
         }
     }
 }

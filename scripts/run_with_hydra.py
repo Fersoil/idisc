@@ -155,9 +155,10 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg.get("sam3_cache_dir")),
+                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
                 "output_dir": str(run_dir),
                 "config": runtime_cfg,
+                "load_pretrained": runtime_cfg.get("run", {}).get("load_pretrained", True),
             }
             metrics = run_eval(eval_cfg)
             metrics_path = run_dir / "metrics.json"
@@ -237,8 +238,10 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg.get("sam3_cache_dir")),
+                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
+                "use_sequence_dataset": runtime_cfg.get("finetune", {}).get("use_sequence_dataset", False),
                 "config": runtime_cfg,
+                "load_pretrained": runtime_cfg.get("run", {}).get("load_pretrained", True),
                 "finetune": {
                     **runtime_cfg["finetune"],
                     "output_dir": finetune_output,

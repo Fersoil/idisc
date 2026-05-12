@@ -12,6 +12,7 @@ IDR_SOURCE_AND_MODE_TO_VARIANT = {
     ("afp", "none"): "baseline",
     ("afp", "replace"): "sam-replace",
     ("afp", "concat"): "sam-concat",
+    ("afp", "translate"): "sam-translate",
 }
 
 

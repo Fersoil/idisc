@@ -13,7 +13,7 @@ import torch.nn.functional as F
 
 from idisc.models.defattn_decoder import MSDeformAttnPixelDecoder
 from idisc.models.fpn_decoder import BasePixelDecoder
-from idisc.models.id_module import AFP, ISD
+from idisc.models.id_module import AFP, ISD, Sam3QueryToIDR
 
 SAM3_D_MODEL = 256
 
@@ -30,6 +30,7 @@ class IDisc(nn.Module):
         eps: float = 1e-6,
         num_resolutions: int = 3,
         latent_dim: int = 128,
+        sam3_translate: Optional[nn.Module] = None,
         **kwargs
     ):
         super().__init__()
@@ -46,6 +47,7 @@ class IDisc(nn.Module):
             nn.Linear(SAM3_D_MODEL, latent_dim)
             for _ in range(num_resolutions)
         ])
+        self.sam3_translate = sam3_translate
 
     def invert_encoder_output_order(
         self, xs: Tuple[torch.Tensor, ...]
@@ -65,19 +67,32 @@ class IDisc(nn.Module):
         sam_mode="concat",
         gt: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
+        pre_extracted_encoder_outputs: Optional[Tuple[torch.Tensor, ...]] = None,
     ):
         """
         Args:
-            instance_queries: SAM3 query embeddings (32, 256) for linear projection path
-            raw_idrs: Pre-computed IDR tuple for branch/replace bypass (skips AFP and sam3_proj)
-            sam_mode: "concat" = append SAM3 IDRs to AFP IDRs (default)
-                      "replace" = use SAM3 IDRs instead of AFP IDRs
+            instance_queries: SAM3 query embeddings (K, 256) for projection path
+            raw_idrs: Pre-computed IDR tuple (skips AFP and sam3_proj)
+            sam_mode: "concat", "replace", "translate", "random_idrs", "none"
+            pre_extracted_encoder_outputs: If provided, skip the pixel_encoder
+                call. Tuple of FPN feature maps (already in inverted order
+                matching what pixel_decoder expects). Used by the video encoder
+                training loop to avoid double-running the backbone.
         """
         losses = {"opt": {}, "stat": {}}
         original_shape = gt.shape[-2:] if gt is not None else image.shape[-2:]
 
-        encoder_outputs = self.pixel_encoder(image)
-        encoder_outputs = self.invert_encoder_output_order(encoder_outputs)
+        if pre_extracted_encoder_outputs is not None:
+            # Video encoder path: FPN already extracted outside this call.
+            encoder_outputs = pre_extracted_encoder_outputs
+        else:
+            encoder_outputs = self.pixel_encoder(image)
+            if getattr(self.pixel_encoder, "yields_instance_queries", False):
+                *encoder_outputs, encoder_queries = encoder_outputs
+                encoder_outputs = tuple(encoder_outputs)
+                if instance_queries is None:
+                    instance_queries = encoder_queries
+            encoder_outputs = self.invert_encoder_output_order(encoder_outputs)
 
         # DefAttn Decoder + filter useful resolutions (usually skip the lowest one)
         fpn_outputs, decoder_outputs = self.pixel_decoder(encoder_outputs)
@@ -90,15 +105,22 @@ class IDisc(nn.Module):
             idrs = raw_idrs
         elif instance_queries is not None and instance_queries.shape[0] > 0:
             iq = instance_queries.unsqueeze(0) if instance_queries.dim() == 2 else instance_queries
-            sam_idrs = tuple(proj(iq) for proj in self.sam3_proj)
-            if sam_mode == "replace":
-                idrs = sam_idrs
-            else:  # concat (default)
-                idrs = self.afp(decoder_outputs)
-                idrs = tuple(
-                    torch.cat([afp_idr, sam_idr], dim=1)
-                    for afp_idr, sam_idr in zip(idrs, sam_idrs)
-                )
+            if sam_mode == "translate":
+                if self.sam3_translate is None:
+                    raise RuntimeError(
+                        "sam_mode='translate' requires sam3_translate to be built"
+                    )
+                idrs = self.sam3_translate(iq)
+            else:
+                sam_idrs = tuple(proj(iq) for proj in self.sam3_proj)
+                if sam_mode == "replace":
+                    idrs = sam_idrs
+                else:  # concat (default)
+                    idrs = self.afp(decoder_outputs)
+                    idrs = tuple(
+                        torch.cat([afp_idr, sam_idr], dim=1)
+                        for afp_idr, sam_idr in zip(idrs, sam_idrs)
+                    )
         else:
             idrs = self.afp(decoder_outputs)
         outs = self.isd(fpn_outputs, idrs)
@@ -186,6 +208,18 @@ class IDisc(nn.Module):
         config_backone = {"img_size": np.array(pixel_encoder_img_size)}
         if pixel_encoder_pretrained is not None:
             config_backone["pretrained"] = pixel_encoder_pretrained
+        for extra_key in (
+            "sam_checkpoint",
+            "prompt_mode",
+            "prompt_classes",
+            "freeze_sam3",
+            "load_from_HF",
+            "use_presence_score",
+            "top_k_queries",
+            "confidence_threshold",
+        ):
+            if extra_key in config["model"]["pixel_encoder"]:
+                config_backone[extra_key] = config["model"]["pixel_encoder"][extra_key]
         import importlib
 
         mod = importlib.import_module("idisc.models.encoder")
@@ -203,6 +237,12 @@ class IDisc(nn.Module):
         afp = AFP.build(config)
         isd = ISD.build(config)
 
+        sam3_translate = (
+            Sam3QueryToIDR.build(config)
+            if "sam3_translate" in config["model"]
+            else None
+        )
+
         mod = importlib.import_module("idisc.optimization.losses")
         loss = getattr(mod, config["training"]["loss"]["name"]).build(config)
 
@@ -217,5 +257,6 @@ class IDisc(nn.Module):
                 - config["model"]["isd"]["num_resolutions"],
                 num_resolutions=config["model"]["isd"]["num_resolutions"],
                 latent_dim=config["model"]["afp"]["latent_dim"],
+                sam3_translate=sam3_translate,
             )
         )

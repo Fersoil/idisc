@@ -1,0 +1,40 @@
+# @package _global_
+#
+# E20 — Pure SAM3 + Linear(replace) + single multiclass prompt + 200 tokens:
+#   Single SAM3 decoder call per frame with all 4 class names in one prompt
+#   ("vehicle . tree . road . building"). All 200 decoder slots used without
+#   top-K filtering. 4× faster per step than previous singleclass-loop runs.
+
+defaults:
+  - override /dataset: kitti
+
+run:
+  exp_id: E20-sam3-pure-multiclass
+  task: finetune
+  load_pretrained: false
+
+dataset:
+  legacy_config_path: configs/kitti/kitti_sam3.json
+
+method:
+  idr_source: afp
+  sam_mode: replace
+  query_source: online
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+    use_bbox: false
+    strategy: top_k_by_confidence
+
+finetune:
+  n_iters: 5000
+  lr: 5.0e-5
+  val_interval: 500
+  batch_size: 2
+  output_dir: finetune_output/E20-sam3-pure-multiclass
+
+tags:
+  - sam3-pure
+  - replace
+  - multiclass-single-prompt
+  - 200-tokens

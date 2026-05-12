@@ -1,0 +1,38 @@
+# @package _global_
+#
+# E19 — SAM3 Video encoder + iDisc d2c (sequence dataset):
+#   - Wraps SAM3's video inference (detector + tracker) instead of the
+#     image-only Sam3Processor. Temporal memory propagates object detections
+#     from frame 0 to frames 1-3 within each 4-frame clip.
+#   - FPN features come from the same backbone as before.
+#   - Queries for later frames are conditioned on the tracker's memory.
+
+defaults:
+  - override /dataset: kitti
+
+run:
+  exp_id: E19-sam3-video-sequence
+  task: finetune
+  load_pretrained: false
+
+dataset:
+  legacy_config_path: configs/kitti/kitti_sam3_video.json
+
+method:
+  idr_source: afp
+  sam_mode: replace
+  query_source: online
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+    use_bbox: false
+    strategy: top_k_by_confidence
+
+finetune:
+  use_sequence_dataset: true
+
+tags:
+  - sam3-video
+  - translate
+  - singleclass
+  - sequence

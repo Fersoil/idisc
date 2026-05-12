@@ -74,15 +74,41 @@ def extract_online_queries(proc, raw_img, prompt_mode):
             return iq.float().clone() if iq is not None else None
 
 
+def _flatten_sequence_batch(batch, device):
+    """Flatten (B, T, ...) sequence batches into (B*T, ...) so a single per-frame
+    training/validation loop handles both sequence and single-frame datasets."""
+    images = batch["images"].to(device)
+    B, T = images.shape[:2]
+    data = images.view(B * T, *images.shape[2:])
+    gt = batch["depths"].to(device).view(B * T, *batch["depths"].shape[2:])
+    mask = batch["masks"].to(device).view(B * T, *batch["masks"].shape[2:])
+    q = batch.get("sam3_queries")
+    sam3_q = (
+        q.to(device).view(B * T, q.shape[2], q.shape[3])
+        if (q is not None and q.dim() == 4)
+        else None
+    )
+    return data, gt, mask, sam3_q, B * T
+
+
+def _unpack_batch(batch, device):
+    """Returns (data, gt, mask, sam3_q, n_samples) for both single-frame and sequence batches."""
+    if "images" in batch:
+        return _flatten_sequence_batch(batch, device)
+    data = batch["image"].to(device)
+    gt = batch["gt"].to(device)
+    mask = batch["mask"].to(device)
+    q = batch.get("sam3_queries")
+    sam3_q = q.to(device) if (q is not None and q.dim() >= 2) else None
+    return data, gt, mask, sam3_q, data.shape[0]
+
+
 def validate_model(model, valid_loader, context, device, sam_mode="concat",
                     sam_proc=None, prompt_mode=None):
     metrics_tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
 
     for i, batch in enumerate(valid_loader):
-        data = batch["image"].to(device)
-        gt = batch["gt"].to(device)
-        mask = batch["mask"].to(device)
-        sam3_q = batch.get("sam3_queries")
+        data, gt, mask, sam3_q, _ = _unpack_batch(batch, device)
 
         batch_preds = []
         for idx in range(data.shape[0]):
@@ -95,7 +121,7 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
             elif sam3_q is not None:
                 q = sam3_q[idx]
                 if q.dim() >= 2 and q.shape[0] > 0:
-                    iq = q.to(device)
+                    iq = q
 
             with context:
                 pred, _, _ = model(
@@ -123,12 +149,14 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
 
 def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
     mode = cfg.get("mode")
-    if mode in {"concat", "replace"}:
+    if mode in {"concat", "replace", "translate"}:
         return mode
 
     variant = cfg.get("variant")
     if variant == "sam-replace":
         return "replace"
+    if variant == "sam-translate":
+        return "translate"
     if variant in {"sam-concat", "sam-cached-video", "concat", "replace"}:
         return "concat" if variant != "replace" else "replace"
 
@@ -146,8 +174,15 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     sam_checkpoint = cfg.get("sam_checkpoint")
     sam3_cache_dir = cfg.get("sam3_cache_dir")
 
-    if sam_checkpoint is None and sam3_cache_dir is None:
+    encoder_name = config["model"]["pixel_encoder"].get("name", "")
+    encoder_owns_sam3 = encoder_name in ("sam3_image", "sam3_video")
+    encoder_is_video = encoder_name == "sam3_video"
+
+    if not encoder_owns_sam3 and sam_checkpoint is None and sam3_cache_dir is None:
         raise ValueError("Either sam_checkpoint or sam3_cache_dir is required")
+
+    if cfg.get("use_sequence_dataset"):
+        config["data"]["train_dataset"] = "KITTISequenceDataset"
 
     finetune_cfg = cfg.get("finetune", {})
     output_dir = finetune_cfg.get("output_dir", cfg.get("output_dir", "finetune_output"))
@@ -156,7 +191,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     val_interval = int(finetune_cfg.get("val_interval", cfg.get("val_interval", 500)))
     batch_size = int(finetune_cfg.get("batch_size", cfg.get("batch_size", 2)))
 
-    use_online_sam = sam_checkpoint is not None
+    use_online_sam = sam_checkpoint is not None and not encoder_owns_sam3
 
     seed = config["generic"]["seed"]
     random.seed(seed)
@@ -179,16 +214,32 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     # Load iDisc
     print("Loading iDisc model...", flush=True)
     model = IDisc.build(config).to(device)
-    model.load_pretrained(cfg["model_file"])
-    print("  iDisc loaded.", flush=True)
+    load_pretrained = cfg.get("load_pretrained", not encoder_owns_sam3)
+    if load_pretrained:
+        model.load_pretrained(cfg["model_file"])
+        print("  iDisc loaded (pretrained weights).", flush=True)
+    else:
+        print("  iDisc built from scratch (no pretrained weights).", flush=True)
 
-    # Freeze everything except sam3_proj and ISD
-    for param in model.parameters():
-        param.requires_grad = False
-    for param in model.sam3_proj.parameters():
-        param.requires_grad = True
-    for param in model.isd.parameters():
-        param.requires_grad = True
+    if encoder_owns_sam3:
+        # Pure SAM3 + d2c: SAM3 is frozen inside the encoder; iDisc-side
+        # modules (pixel_decoder, AFP, ISD, sam3_proj) train fresh.
+        for param in model.parameters():
+            param.requires_grad = True
+        # Freeze the SAM3 weights (image encoder or video encoder).
+        sam_model = getattr(model.pixel_encoder, "sam_model",
+                            getattr(model.pixel_encoder, "video_model", None))
+        if sam_model is not None:
+            for param in sam_model.parameters():
+                param.requires_grad = False
+    else:
+        # Legacy fine-tune: freeze everything except sam3_proj and ISD.
+        for param in model.parameters():
+            param.requires_grad = False
+        for param in model.sam3_proj.parameters():
+            param.requires_grad = True
+        for param in model.isd.parameters():
+            param.requires_grad = True
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -201,13 +252,21 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     train_dataset = getattr(custom_dataset, config["data"]["train_dataset"])(
         test_mode=False,
         base_path=data_path,
-        crop=config["data"]["crop"],
-        augmentations_db=config["data"]["augmentations"],
+        crop=config["data"].get("crop"),
+        augmentations_db=config["data"].get("augmentations", {}),
         sam3_cache_dir=cache_dir,
+        manifest_path=config["data"].get("manifest_path"),
+        clip_length=config["data"].get("clip_length", 4),
+        stride=config["data"].get("stride"),
     )
     valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
-        test_mode=True, base_path=data_path, crop=config["data"]["crop"],
+        test_mode=True,
+        base_path=data_path,
+        crop=config["data"].get("crop"),
         sam3_cache_dir=cache_dir,
+        manifest_path=config["data"].get("manifest_path"),
+        clip_length=config["data"].get("clip_length", 4),
+        stride=config["data"].get("stride"),
     )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
@@ -253,39 +312,101 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
             if step >= n_iters:
                 break
 
-            data = batch["image"].to(device)
-            gt = batch["gt"].to(device)
-            mask = batch["mask"].to(device)
-            sam3_q = batch.get("sam3_queries")
-
             optimizer.zero_grad()
             total_loss = 0.0
+            valid_frames = 0
 
-            for idx in range(data.shape[0]):
-                iq = None
-                if use_online_sam:
-                    raw_img = denormalize_imagenet(data[idx])
-                    with torch.no_grad():
-                        iq = extract_online_queries(sam_proc, raw_img, prompt_mode)
-                    if iq is not None:
-                        iq = iq.to(device)
-                elif sam3_q is not None:
-                    q = sam3_q[idx]
-                    if q.dim() >= 2 and q.shape[0] > 0:
-                        iq = q.to(device)
+            if encoder_is_video and "images" in batch:
+                # Video-encoder path: pass each clip in the batch to the
+                # encoder, get per-frame (FPN, queries), then run iDisc
+                # per frame.  Batch is (B, T, 3, H, W); no flatten needed.
+                images = batch["images"].to(device)  # (B, T, 3, H, W)
+                depths = batch["depths"].to(device)  # (B, T, 1, H, W)
+                masks  = batch["masks"].to(device)   # (B, T, 1, H, W)
+                B, T = images.shape[:2]
+                n_samples = B * T
 
-                with context:
-                    pred, losses, _ = model(
-                        data[idx:idx + 1],
-                        instance_queries=iq,
-                        sam_mode=sam_mode,
-                        gt=gt[idx:idx + 1],
-                        mask=mask[idx:idx + 1],
-                    )
-                    loss = sum(v for v in losses["opt"].values()) / data.shape[0]
+                for b in range(B):
+                    clip = images[b]   # (T, 3, H, W)
+                    # encoder.forward(clip) → (*FPN_T, queries_T)
+                    enc_out = model.pixel_encoder(clip)
+                    # Last element is queries (T, K, 256); rest are FPN levels
+                    fpn_levels = enc_out[:-1]      # each (T, C, h, w)
+                    queries_T  = enc_out[-1]       # (T, K, 256)
 
-                loss.backward()
-                total_loss += loss.item()
+                    for t in range(T):
+                        gt_t   = depths[b, t : t + 1]     # (1, 1, H, W)
+                        mask_t = masks[b, t : t + 1]      # (1, 1, H, W)
+                        if mask_t.bool().sum() == 0:
+                            continue
+
+                        # Provide the pre-extracted single-frame FPN to iDisc.
+                        frame_fpn = tuple(
+                            lvl[t : t + 1] for lvl in fpn_levels
+                        )
+                        # iDisc.forward needs the FPN in encoder output order
+                        # (high-res first); invert_encoder_output_order then
+                        # pixel_decoder handle the rest.  Pre-extracted FPN
+                        # is in iDisc encoder_output order (already inverted);
+                        # pass via pre_extracted_encoder_outputs after
+                        # re-inverting so the model inverts it back.
+                        inv_frame_fpn = tuple(reversed(frame_fpn))
+
+                        iq = queries_T[t]   # (K, 256)
+
+                        with context:
+                            pred, losses, _ = model(
+                                images[b, t : t + 1],  # still needed for shape
+                                instance_queries=iq,
+                                sam_mode=sam_mode,
+                                pre_extracted_encoder_outputs=inv_frame_fpn,
+                                gt=gt_t,
+                                mask=mask_t,
+                            )
+                            loss = sum(v for v in losses["opt"].values()) / n_samples
+
+                        loss.backward()
+                        total_loss += loss.item()
+                        valid_frames += 1
+            else:
+                # Standard (image-encoder) path.
+                data, gt, mask, sam3_q, n_samples = _unpack_batch(batch, device)
+
+                for idx in range(n_samples):
+                    # Skip frames whose GT mask is all-False (sequence dataset
+                    # zero-fills GT for frames without LiDAR labels; SILog over
+                    # zero valid pixels returns NaN and poisons the model).
+                    if mask[idx].bool().sum() == 0:
+                        continue
+
+                    iq = None
+                    if use_online_sam:
+                        raw_img = denormalize_imagenet(data[idx])
+                        with torch.no_grad():
+                            iq = extract_online_queries(sam_proc, raw_img, prompt_mode)
+                        if iq is not None:
+                            iq = iq.to(device)
+                    elif sam3_q is not None:
+                        q = sam3_q[idx]
+                        if q.dim() >= 2 and q.shape[0] > 0:
+                            iq = q
+
+                    with context:
+                        pred, losses, _ = model(
+                            data[idx:idx + 1],
+                            instance_queries=iq,
+                            sam_mode=sam_mode,
+                            gt=gt[idx:idx + 1],
+                            mask=mask[idx:idx + 1],
+                        )
+                        loss = sum(v for v in losses["opt"].values()) / n_samples
+
+                    loss.backward()
+                    total_loss += loss.item()
+                    valid_frames += 1
+
+            if valid_frames == 0:
+                continue
 
             nn.utils.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()
@@ -310,31 +431,56 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                                              sam_mode=sam_mode, sam_proc=sam_proc,
                                              prompt_mode=prompt_mode if use_online_sam else None)
                 model.train()
-                for param in model.parameters():
-                    param.requires_grad = False
-                for param in model.sam3_proj.parameters():
-                    param.requires_grad = True
-                for param in model.isd.parameters():
-                    param.requires_grad = True
+                if encoder_owns_sam3:
+                    for param in model.parameters():
+                        param.requires_grad = True
+                    sam_model = getattr(model.pixel_encoder, "sam_model",
+                                        getattr(model.pixel_encoder, "video_model", None))
+                    if sam_model is not None:
+                        for param in sam_model.parameters():
+                            param.requires_grad = False
+                else:
+                    for param in model.parameters():
+                        param.requires_grad = False
+                    for param in model.sam3_proj.parameters():
+                        param.requires_grad = True
+                    for param in model.isd.parameters():
+                        param.requires_grad = True
 
                 abs_rel = metrics.get("abs_rel", np.inf)
                 print(f"  abs_rel={abs_rel:.6f}  (best={best_abs_rel:.6f})", flush=True)
                 for k, v in sorted(metrics.items()):
                     print(f"    {k}: {v:.6f}", flush=True)
 
+                # Drop frozen SAM3 weights from checkpoints — they're reloaded
+                # from sam_checkpoint at startup, so persisting them per-save
+                # bloats the checkpoint by ~16x and triggers OOM/EDQUOT.
+                def _trainable_state_dict():
+                    sd = model.state_dict()
+                    if encoder_owns_sam3:
+                        sd = {k: v for k, v in sd.items()
+                              if not k.startswith("pixel_encoder.sam_model.")
+                              and not k.startswith("pixel_encoder.video_model.")}
+                    return sd
+
                 if abs_rel < best_abs_rel:
                     best_abs_rel = abs_rel
                     ckpt_path = os.path.join(output_dir, "best_sam_finetuned.pt")
-                    torch.save(model.state_dict(), ckpt_path)
+                    torch.save(_trainable_state_dict(), ckpt_path)
                     print(f"  New best! Saved to {ckpt_path}", flush=True)
 
                 ckpt_path = os.path.join(output_dir, f"checkpoint_step{step}.pt")
-                torch.save(model.state_dict(), ckpt_path)
+                torch.save(_trainable_state_dict(), ckpt_path)
                 print(f"  Checkpoint saved to {ckpt_path}\n", flush=True)
 
     # Final save
     final_path = os.path.join(output_dir, "final_sam_finetuned.pt")
-    torch.save(model.state_dict(), final_path)
+    final_sd = model.state_dict()
+    if encoder_owns_sam3:
+        final_sd = {k: v for k, v in final_sd.items()
+                    if not k.startswith("pixel_encoder.sam_model.")
+                    and not k.startswith("pixel_encoder.video_model.")}
+    torch.save(final_sd, final_path)
     print(f"\nFine-tuning complete. Final model saved to {final_path}", flush=True)
     print(f"Best abs_rel: {best_abs_rel:.6f}", flush=True)
 
@@ -366,6 +512,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--val-interval", type=int, default=500)
     parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--use-sequence-dataset", action="store_true",
+                        help="Override config to use KITTISequenceDataset for training")
     return parser.parse_args()
 
 
@@ -385,6 +533,7 @@ def main():
             "lr": args.lr,
             "val_interval": args.val_interval,
             "batch_size": args.batch_size,
+            "use_sequence_dataset": args.use_sequence_dataset,
         }
     )
 

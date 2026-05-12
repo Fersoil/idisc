@@ -36,5 +36,7 @@ finetune:
 tags:
   - sam3-pure
   - replace
-  - singleclass
+  - multiclass
   - sequence
+  - sam3-frozen
+  - idisc-scratch

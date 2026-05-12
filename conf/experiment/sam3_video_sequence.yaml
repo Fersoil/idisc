@@ -32,6 +32,8 @@ finetune:
 
 tags:
   - sam3-video
-  - translate
-  - singleclass
+  - replace
+  - multiclass
   - sequence
+  - sam3-frozen
+  - idisc-scratch

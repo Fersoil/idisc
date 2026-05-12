@@ -35,5 +35,6 @@ finetune:
 tags:
   - sam3-pure
   - replace
-  - multiclass-single-prompt
-  - 200-tokens
+  - multiclass
+  - sam3-frozen
+  - idisc-scratch

@@ -30,4 +30,6 @@ method:
 tags:
   - sam3-pure
   - translate
-  - singleclass
+  - multiclass
+  - sam3-frozen
+  - idisc-scratch

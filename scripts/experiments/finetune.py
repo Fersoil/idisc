@@ -1,16 +1,13 @@
 #!/usr/bin/env python
 """
-Fine-tune iDisc with SAM3 queries.
-Freezes pixel_encoder, pixel_decoder, and AFP.
-Only trains: sam3_proj (Linear(256,128) per resolution) + ISD heads.
+Training backend for SAM3+iDisc depth fine-tuning.
 
-Modes:
-  --mode concat   Concatenate SAM3 IDRs with AFP (default)
-  --mode replace  Replace AFP entirely with SAM3 IDRs
-
-Query source:
-  --sam3-cache-dir  Use pre-cached video queries from dataloader (F4)
-  --sam-checkpoint  Run SAM3 online per image (F1/F2/F3)
+Called by `run_with_hydra.py` when `run.task=finetune`. Handles both the
+pure-SAM3 path (encoder_owns_sam3=True — whole backbone is SAM3, iDisc-side
+modules train from scratch) and the legacy frozen-backbone path (only
+sam3_proj + ISD train). Supports single-frame and sequence (KITTISequenceDataset)
+data, per-param-group backbone LR, and the step-500 NaN guard for sequence clips
+with missing GT depth.
 """
 
 import argparse
@@ -19,6 +16,12 @@ import os
 import random
 from time import time
 from typing import Any
+
+try:
+    import wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
 
 import numpy as np
 import torch
@@ -51,22 +54,16 @@ def extract_online_queries(proc, raw_img, prompt_mode):
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         state = proc.set_image(raw_img)
         if prompt_mode == "singleclass":
-            all_queries, all_scores = [], []
+            all_queries = []
             for cls in KITTI_CLASSES:
                 proc.reset_all_prompts(state)
                 proc.set_text_prompt(prompt=cls, state=state)
                 iq = state.get("instance_queries")
-                tk = state.get("topk_scores")
                 if iq is not None and iq.shape[0] > 0:
                     all_queries.append(iq)
-                    all_scores.append(tk)
             if not all_queries:
                 return None
-            all_queries = torch.cat(all_queries, dim=0)
-            all_scores = torch.cat(all_scores, dim=0)
-            top_k = min(proc.top_k_queries, all_queries.shape[0])
-            _, best_idx = all_scores.topk(top_k)
-            return all_queries[best_idx].float().clone()
+            return torch.cat(all_queries, dim=0).float().clone()
         else:
             prompt = MULTI_CLASS_PROMPT if prompt_mode == "multiclass" else ""
             proc.set_text_prompt(prompt=prompt, state=state)
@@ -80,8 +77,8 @@ def _flatten_sequence_batch(batch, device):
     images = batch["images"].to(device)
     B, T = images.shape[:2]
     data = images.view(B * T, *images.shape[2:])
-    gt = batch["depths"].to(device).view(B * T, *batch["depths"].shape[2:])
-    mask = batch["masks"].to(device).view(B * T, *batch["masks"].shape[2:])
+    gt = batch["gt"].to(device).view(B * T, *batch["gt"].shape[2:])
+    mask = batch["mask"].to(device).view(B * T, *batch["mask"].shape[2:])
     q = batch.get("sam3_queries")
     sam3_q = (
         q.to(device).view(B * T, q.shape[2], q.shape[3])
@@ -146,6 +143,70 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
     metrics_tracker.reset_metrics()
     return metrics
 
+def validate_model_sequential(model, valid_loader, context, device, sam_mode="concat"):
+    metrics_tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
+
+    for i, batch in enumerate(valid_loader):
+        images = batch["images"].to(device)  # (B, T, 3, H, W)
+        depths = batch["depths"].to(device)  # (B, T, 1, H, W)
+        masks  = batch["masks"].to(device)   # (B, T, 1, H, W)
+        B, T = images.shape[:2]
+        n_samples = B * T
+        
+        batch_preds = []
+        batch_masks = []
+        batch_depths = []
+        for b in range(B):
+            clip = images[b]   # (T, 3, H, W)
+            # encoder.forward(clip) → (*FPN_T, queries_T)
+            enc_out = model.pixel_encoder(clip)
+            # Last element is queries (T, K, 256); rest are FPN levels
+            fpn_levels = enc_out[:-1]      # each (T, C, h, w)
+            queries_T  = enc_out[-1]       # (T, K, 256)
+
+            for t in range(T):
+                gt_t   = depths[b, t : t + 1]     # (1, 1, H, W)
+                mask_t = masks[b, t : t + 1]      # (1, 1, H, W)
+                if mask_t.bool().sum() == 0:
+                    continue
+
+                frame_fpn = tuple(
+                    lvl[t : t + 1] for lvl in fpn_levels
+                )
+                inv_frame_fpn = tuple(reversed(frame_fpn))
+
+                iq = queries_T[t]   # (K, 256)
+
+                with context:
+                    pred, _, _ = model(
+                        images[b, t : t + 1],  # still needed for shape
+                        instance_queries=iq,
+                        sam_mode=sam_mode,
+                        pre_extracted_encoder_outputs=inv_frame_fpn,
+                        gt=gt_t,
+                        mask=mask_t,
+                    )
+                batch_preds.append(pred)
+                batch_masks.append(mask_t)
+                batch_depths.append(gt_t)
+                
+        if len(batch_preds):                    # sometimes all from batch have zero masks
+            preds = torch.cat(batch_preds, dim=0)
+            valid_masks = torch.cat(batch_masks, dim=0)
+            valid_depths = torch.cat(batch_depths, dim=0)
+            metrics_tracker.accumulate_metrics(
+                valid_depths.permute(0, 2, 3, 1),
+                preds.permute(0, 2, 3, 1),
+                valid_masks.permute(0, 2, 3, 1),
+            )
+
+        if (i + 1) % 100 == 0:
+            print(f"  Val seq: {i+1}/{len(valid_loader)}", flush=True)
+
+    metrics = metrics_tracker.get_metrics()
+    metrics_tracker.reset_metrics()
+    return metrics
+
 
 def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
     mode = cfg.get("mode")
@@ -157,7 +218,7 @@ def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
         return "replace"
     if variant == "sam-translate":
         return "translate"
-    if variant in {"sam-concat", "sam-cached-video", "concat", "replace"}:
+    if variant in {"sam-concat", "concat", "replace"}:
         return "concat" if variant != "replace" else "replace"
 
     raise ValueError(f"Cannot infer finetune mode from variant={variant!r}")
@@ -172,17 +233,17 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     sam_mode = _resolve_finetune_mode(cfg)
     prompt_mode = cfg.get("prompt_mode", "multiclass")
     sam_checkpoint = cfg.get("sam_checkpoint")
-    sam3_cache_dir = cfg.get("sam3_cache_dir")
 
     encoder_name = config["model"]["pixel_encoder"].get("name", "")
     encoder_owns_sam3 = encoder_name in ("sam3_image", "sam3_video")
     encoder_is_video = encoder_name == "sam3_video"
 
-    if not encoder_owns_sam3 and sam_checkpoint is None and sam3_cache_dir is None:
-        raise ValueError("Either sam_checkpoint or sam3_cache_dir is required")
+    if not encoder_owns_sam3 and sam_checkpoint is None:
+        raise ValueError("sam_checkpoint is required for non-SAM3-encoder variants")
 
     if cfg.get("use_sequence_dataset"):
         config["data"]["train_dataset"] = "KITTISequenceDataset"
+        config["data"]["val_dataset"] = "KITTISequenceDataset"
 
     finetune_cfg = cfg.get("finetune", {})
     output_dir = finetune_cfg.get("output_dir", cfg.get("output_dir", "finetune_output"))
@@ -192,6 +253,32 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     batch_size = int(finetune_cfg.get("batch_size", cfg.get("batch_size", 2)))
 
     use_online_sam = sam_checkpoint is not None and not encoder_owns_sam3
+
+    _finetune_wandb_cfg = {
+        "sam_mode": sam_mode,
+        "prompt_mode": prompt_mode,
+        "encoder_owns_sam3": encoder_owns_sam3,
+        "n_iters": n_iters,
+        "lr": lr,
+        "batch_size": batch_size,
+        "val_interval": val_interval,
+        "output_dir": output_dir,
+        "use_sequence_dataset": cfg.get("use_sequence_dataset", False),
+    }
+    use_wandb = _WANDB_AVAILABLE and cfg.get("use_wandb", True)
+    _wandb_run_owned = False
+    if use_wandb:
+        if wandb.run is not None:
+            # Already initialised by run_with_hydra tracked_run — just patch config.
+            wandb.config.update({"finetune": _finetune_wandb_cfg}, allow_val_change=True)
+        else:
+            wandb.init(
+                project=cfg.get("wandb_project", "idisc-finetune"),
+                name=cfg.get("wandb_name"),
+                tags=cfg.get("wandb_tags"),
+                config={**config, "finetune": _finetune_wandb_cfg},
+            )
+            _wandb_run_owned = True
 
     seed = config["generic"]["seed"]
     random.seed(seed)
@@ -206,8 +293,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     print(f"Mode: {sam_mode}", flush=True)
     if use_online_sam:
         print(f"Prompt: {prompt_mode}", flush=True)
-    else:
-        print(f"Cache: {sam3_cache_dir}", flush=True)
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}", flush=True)
 
@@ -246,7 +331,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     print(f"  Trainable params: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)", flush=True)
 
     # Datasets
-    cache_dir = sam3_cache_dir if not use_online_sam else None
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     print(f"Loading data from {data_path}...", flush=True)
     train_dataset = getattr(custom_dataset, config["data"]["train_dataset"])(
@@ -254,7 +338,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
         base_path=data_path,
         crop=config["data"].get("crop"),
         augmentations_db=config["data"].get("augmentations", {}),
-        sam3_cache_dir=cache_dir,
         manifest_path=config["data"].get("manifest_path"),
         clip_length=config["data"].get("clip_length", 4),
         stride=config["data"].get("stride"),
@@ -263,7 +346,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
         test_mode=True,
         base_path=data_path,
         crop=config["data"].get("crop"),
-        sam3_cache_dir=cache_dir,
         manifest_path=config["data"].get("manifest_path"),
         clip_length=config["data"].get("clip_length", 4),
         stride=config["data"].get("stride"),
@@ -324,7 +406,10 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 depths = batch["depths"].to(device)  # (B, T, 1, H, W)
                 masks  = batch["masks"].to(device)   # (B, T, 1, H, W)
                 B, T = images.shape[:2]
-                n_samples = B * T
+
+                valid_frames = int(masks.bool().any(dim=(2, 3, 4)).sum().item())
+                if valid_frames == 0:
+                    continue
 
                 for b in range(B):
                     clip = images[b]   # (T, 3, H, W)
@@ -363,11 +448,13 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                                 gt=gt_t,
                                 mask=mask_t,
                             )
-                            loss = sum(v for v in losses["opt"].values()) / n_samples
+                            loss = sum(v for v in losses["opt"].values())
 
-                        loss.backward()
+                        (loss / valid_frames).backward()
                         total_loss += loss.item()
-                        valid_frames += 1
+
+                total_loss /= valid_frames
+
             else:
                 # Standard (image-encoder) path.
                 data, gt, mask, sam3_q, n_samples = _unpack_batch(batch, device)
@@ -399,14 +486,16 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                             gt=gt[idx:idx + 1],
                             mask=mask[idx:idx + 1],
                         )
-                        loss = sum(v for v in losses["opt"].values()) / n_samples
+                        loss = sum(v for v in losses["opt"].values())
 
-                    loss.backward()
+                    (loss / n_samples).backward()
                     total_loss += loss.item()
                     valid_frames += 1
 
-            if valid_frames == 0:
-                continue
+                if valid_frames == 0:
+                    continue
+
+                total_loss /= valid_frames
 
             nn.utils.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()
@@ -422,12 +511,18 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                     f"lr={lr_now:.2e} | [{format_seconds(elapsed)}<{format_seconds(eta)}]",
                     flush=True,
                 )
+            
+                if use_wandb and wandb.run is not None:
+                    wandb.log({"train/loss": total_loss, "train/lr": lr_now}, step=step)
 
             if step % val_interval == 0 or step == n_iters:
                 print(f"\n  Validation at step {step}...", flush=True)
                 model.eval()
                 with torch.no_grad():
-                    metrics = validate_model(model, valid_loader, context, device,
+                    if cfg.get("use_sequence_dataset"):
+                        metrics = validate_model_sequential(model, valid_loader, context, device, sam_mode=sam_mode)
+                    else:
+                        metrics = validate_model(model, valid_loader, context, device,
                                              sam_mode=sam_mode, sam_proc=sam_proc,
                                              prompt_mode=prompt_mode if use_online_sam else None)
                 model.train()
@@ -451,6 +546,8 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 print(f"  abs_rel={abs_rel:.6f}  (best={best_abs_rel:.6f})", flush=True)
                 for k, v in sorted(metrics.items()):
                     print(f"    {k}: {v:.6f}", flush=True)
+                if use_wandb and wandb.run is not None:
+                    wandb.log({f"val/{k}": v for k, v in metrics.items()}, step=step)
 
                 # Drop frozen SAM3 weights from checkpoints — they're reloaded
                 # from sam_checkpoint at startup, so persisting them per-save
@@ -468,6 +565,8 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                     ckpt_path = os.path.join(output_dir, "best_sam_finetuned.pt")
                     torch.save(_trainable_state_dict(), ckpt_path)
                     print(f"  New best! Saved to {ckpt_path}", flush=True)
+                    if use_wandb and wandb.run is not None:
+                        wandb.log({"val/best_abs_rel": best_abs_rel}, step=step)
 
                 ckpt_path = os.path.join(output_dir, f"checkpoint_step{step}.pt")
                 torch.save(_trainable_state_dict(), ckpt_path)
@@ -483,6 +582,8 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     torch.save(final_sd, final_path)
     print(f"\nFine-tuning complete. Final model saved to {final_path}", flush=True)
     print(f"Best abs_rel: {best_abs_rel:.6f}", flush=True)
+    if use_wandb and _wandb_run_owned:
+        wandb.finish()
 
     return {
         "best_abs_rel": float(best_abs_rel),
@@ -504,9 +605,7 @@ def _parse_args() -> argparse.Namespace:
                         choices=["multiclass", "singleclass"],
                         help="Text prompt strategy for online SAM3")
     parser.add_argument("--sam-checkpoint", type=str, default=None,
-                        help="SAM3 checkpoint for online inference (F1/F2/F3)")
-    parser.add_argument("--sam3-cache-dir", type=str, default=None,
-                        help="Directory with pre-cached SAM3 video queries (F4)")
+                        help="SAM3 checkpoint for online inference")
     parser.add_argument("--output-dir", type=str, default="finetune_output")
     parser.add_argument("--n-iters", type=int, default=5000)
     parser.add_argument("--lr", type=float, default=5e-5)
@@ -514,6 +613,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--use-sequence-dataset", action="store_true",
                         help="Override config to use KITTISequenceDataset for training")
+    parser.add_argument("--no-wandb", action="store_true", help="Disable wandb logging")
+    parser.add_argument("--wandb-project", type=str, default="idisc-finetune")
+    parser.add_argument("--wandb-name", type=str, default=None)
     return parser.parse_args()
 
 
@@ -527,13 +629,15 @@ def main():
             "mode": args.mode,
             "prompt_mode": args.prompt_mode,
             "sam_checkpoint": args.sam_checkpoint,
-            "sam3_cache_dir": args.sam3_cache_dir,
             "output_dir": args.output_dir,
             "n_iters": args.n_iters,
             "lr": args.lr,
             "val_interval": args.val_interval,
             "batch_size": args.batch_size,
             "use_sequence_dataset": args.use_sequence_dataset,
+            "use_wandb": not args.no_wandb,
+            "wandb_project": args.wandb_project,
+            "wandb_name": args.wandb_name,
         }
     )
 

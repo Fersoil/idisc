@@ -155,7 +155,6 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
                 "output_dir": str(run_dir),
                 "config": runtime_cfg,
                 "load_pretrained": runtime_cfg.get("run", {}).get("load_pretrained", True),
@@ -195,41 +194,8 @@ def main(cfg: DictConfig) -> None:
                 metadata={"task": task, "exp_id": exp_id},
             )
 
-        elif task == "eval_sam":
-            from scripts.experiments.eval_sam import run_eval_sam
-
-            eval_cfg = {
-                "prompt_mode": runtime_cfg.get("prompt_mode", "none"),
-                "config_file": _resolve_path(runtime_cfg["dataset"]["legacy_config_path"]),
-                "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
-                "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
-                "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "output_dir": str(run_dir),
-                "config": runtime_cfg,
-            }
-            metrics = run_eval_sam(eval_cfg)
-            metrics_path = run_dir / "metrics.json"
-            if metrics_path.exists():
-                metrics_payload = _read_json(metrics_path)
-            else:
-                metrics_payload = metrics
-                _write_json(metrics_path, metrics_payload)
-
-            log_payload: dict[str, Any] = _flatten_dict(metrics_payload, "eval_sam")
-            log_payload["meta/git_branch"] = git_branch
-            log_payload["meta/git_commit"] = git_commit
-            log_metrics(log_payload)
-            log_summary(log_payload)
-
-            log_artifact(
-                run_dir,
-                name=f"{exp_id}-run-output",
-                artifact_type="run-output",
-                metadata={"task": task, "exp_id": exp_id},
-            )
-
         elif task == "finetune":
-            from scripts.experiments.finetune_sam import run_finetune
+            from scripts.experiments.finetune import run_finetune
 
             finetune_output = _resolve_path(runtime_cfg["finetune"]["output_dir"])
             finetune_cfg = {
@@ -238,7 +204,6 @@ def main(cfg: DictConfig) -> None:
                 "model_file": _resolve_path(runtime_cfg["paths"]["pretrained_model"]),
                 "base_path": _resolve_path(runtime_cfg["paths"]["base_path"]),
                 "sam_checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "sam3_cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
                 "use_sequence_dataset": runtime_cfg.get("finetune", {}).get("use_sequence_dataset", False),
                 "config": runtime_cfg,
                 "load_pretrained": runtime_cfg.get("run", {}).get("load_pretrained", True),
@@ -265,39 +230,9 @@ def main(cfg: DictConfig) -> None:
                 metadata={"task": task, "exp_id": exp_id},
             )
 
-        elif task == "cache":
-            from scripts.data.cache_sam3_video import run_cache
-
-            default_manifest = REPO_ROOT / "splits" / "kitti" / "sequence_manifest.json"
-            base_path = _resolve_path(runtime_cfg["paths"]["base_path"]) or str(REPO_ROOT)
-            default_kitti_root = Path(base_path) / "datasets" / "kitti"
-            cache_cfg = {
-                "manifest": _resolve_path(runtime_cfg["paths"].get("sequence_manifest")) or str(default_manifest),
-                "kitti_root": _resolve_path(runtime_cfg["paths"].get("kitti_root")) or str(default_kitti_root),
-                "cache_dir": _resolve_path(runtime_cfg["paths"].get("sam3_cache_dir")),
-                "checkpoint": _resolve_path(runtime_cfg["paths"].get("sam_checkpoint")),
-                "top_k": runtime_cfg["paths"].get("sam3_top_k", 32),
-                "start_idx": runtime_cfg.get("cache", {}).get("start_idx", 0),
-            }
-            summary = run_cache(cache_cfg)
-            _write_json(run_dir / "metrics.json", summary)
-            log_payload = {
-                "meta/git_branch": git_branch,
-                "meta/git_commit": git_commit,
-                "cache/total_cached": summary.get("total_cached", 0),
-            }
-            log_metrics(log_payload)
-            log_summary(log_payload)
-            log_artifact(
-                run_dir,
-                name=f"{exp_id}-run-output",
-                artifact_type="cache-output",
-                metadata={"task": task, "exp_id": exp_id},
-            )
-
         else:
             raise ValueError(
-                f"Unknown task: {task!r}. Valid values: eval | eval_sam | finetune | cache"
+                f"Unknown task: {task!r}. Valid values: eval | finetune"
             )
 
     print("Run complete.")

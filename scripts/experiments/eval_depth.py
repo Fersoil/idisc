@@ -87,22 +87,15 @@ def get_sam_queries_proj(processor, raw_img, prompt_mode):
 
         elif prompt_mode == "singleclass":
             all_queries = []
-            all_scores = []
             for cls in KITTI_CLASSES:
                 processor.reset_all_prompts(state)
                 processor.set_text_prompt(prompt=cls, state=state)
                 iq = state.get("instance_queries")
-                tk = state.get("topk_scores")
                 if iq is not None and iq.shape[0] > 0:
                     all_queries.append(iq)
-                    all_scores.append(tk)
             if not all_queries:
                 return None
-            all_queries = torch.cat(all_queries, dim=0)
-            all_scores = torch.cat(all_scores, dim=0)
-            top_k = min(processor.top_k_queries, all_queries.shape[0])
-            _, best_idx = all_scores.topk(top_k)
-            return all_queries[best_idx].float().clone()
+            return torch.cat(all_queries, dim=0).float().clone()
 
         else:  # empty
             processor.set_text_prompt(prompt="", state=state)
@@ -127,19 +120,16 @@ def _validate_eval_args(cfg: dict[str, Any]) -> None:
         and cfg.get("sam_checkpoint") is None
     ):
         raise ValueError(f"sam_checkpoint is required for variant '{variant}'")
-    if variant == "sam-cached-video" and cfg.get("sam3_cache_dir") is None:
-        raise ValueError("sam3_cache_dir is required for variant 'sam-cached-video'")
 def main():
     parser = argparse.ArgumentParser(description="Depth evaluation")
     parser.add_argument("--variant", required=True,
-                        choices=["baseline", "pooled", "sam-replace", "sam-concat", "sam-cached-video"])
+                        choices=["baseline", "pooled", "sam-replace", "sam-concat"])
     parser.add_argument("--prompt-mode", default="multiclass",
                         choices=["empty", "multiclass", "singleclass", "classonly"])
     parser.add_argument("--config-file", required=True)
     parser.add_argument("--model-file", required=True)
     parser.add_argument("--base-path", required=True)
     parser.add_argument("--sam-checkpoint", default=None)
-    parser.add_argument("--sam3-cache-dir", default=None)
     parser.add_argument("--output-dir", default="results")
     args = parser.parse_args()
 
@@ -179,11 +169,9 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
     model.eval()
 
     # Load data
-    cache_dir = cfg.get("sam3_cache_dir") if variant == "sam-cached-video" else None
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
-        test_mode=True, base_path=data_path, crop=config["data"]["crop"],
-        sam3_cache_dir=cache_dir)
+        test_mode=True, base_path=data_path, crop=config["data"]["crop"])
     valid_loader = DataLoader(valid_dataset, batch_size=1, num_workers=2,
                               sampler=SequentialSampler(valid_dataset),
                               pin_memory=True, drop_last=False)
@@ -246,14 +234,6 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
                         instance_queries = instance_queries.to(device)
                 sam_mode = "concat"
 
-            elif variant == "sam-cached-video":
-                sam3_q = batch.get("sam3_queries")
-                if sam3_q is not None:
-                    q = sam3_q[0]
-                    if q.dim() >= 2 and q.shape[0] > 0:
-                        instance_queries = q.to(device)
-                sam_mode = "concat"
-
             with context:
                 pred, _, _ = model(data,
                                    instance_queries=instance_queries,
@@ -288,14 +268,13 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Depth evaluation")
     parser.add_argument("--variant", required=True,
-                        choices=["baseline", "pooled", "sam-replace", "sam-concat", "sam-cached-video"])
+                        choices=["baseline", "pooled", "sam-replace", "sam-concat"])
     parser.add_argument("--prompt-mode", default="multiclass",
                         choices=["empty", "multiclass", "singleclass", "classonly"])
     parser.add_argument("--config-file", required=True)
     parser.add_argument("--model-file", required=True)
     parser.add_argument("--base-path", required=True)
     parser.add_argument("--sam-checkpoint", default=None)
-    parser.add_argument("--sam3-cache-dir", default=None)
     parser.add_argument("--output-dir", default="eval_results")
     return parser.parse_args()
 
@@ -309,7 +288,6 @@ def main():
         "model_file": args.model_file,
         "base_path": args.base_path,
         "sam_checkpoint": args.sam_checkpoint,
-        "sam3_cache_dir": args.sam3_cache_dir,
         "output_dir": args.output_dir,
     })
 

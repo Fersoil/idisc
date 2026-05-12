@@ -11,7 +11,7 @@ defaults:
   - override /dataset: kitti
 
 run:
-  exp_id: E19-sam3-video-sequence
+  exp_id: E14-online-sam3-video
   task: finetune
   load_pretrained: false
 
@@ -21,18 +21,19 @@ dataset:
 method:
   idr_source: afp
   sam_mode: replace
-  query_source: online
   prompt:
     mode: multiclass
     classes: [vehicle, tree, road, building]
     use_bbox: false
-    strategy: top_k_by_confidence
+    strategy: all
 
 finetune:
   use_sequence_dataset: true
 
 tags:
   - sam3-video
-  - translate
-  - singleclass
+  - replace
+  - multiclass
   - sequence
+  - sam3-frozen
+  - idisc-scratch

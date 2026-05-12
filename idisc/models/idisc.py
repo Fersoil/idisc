@@ -1,6 +1,11 @@
 """
 Author: Luigi Piccinelli
 Licensed under the CC-BY NC 4.0 license (http://creativecommons.org/licenses/by-nc/4.0/)
+
+Top-level `IDisc` model. Composes pixel_encoder → pixel_decoder → AFP/IDR → ISD.
+`sam_mode` controls the IDR source: "none" (AFP only), "replace" (SAM3 queries only),
+"concat" (AFP + SAM3), "translate" (Sam3QueryToIDR cross-attention), "random_idrs" (ablation).
+`IDisc.build(config)` is the canonical constructor — do not call __init__ directly.
 """
 
 from copy import deepcopy
@@ -215,7 +220,6 @@ class IDisc(nn.Module):
             "freeze_sam3",
             "load_from_HF",
             "use_presence_score",
-            "top_k_queries",
             "confidence_threshold",
         ):
             if extra_key in config["model"]["pixel_encoder"]:

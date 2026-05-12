@@ -1,4 +1,8 @@
-# Experiments
+# Experiments (LEGACY)
+
+> **This document covers the E1–E10 hypothesis phase.** Empirical findings from E11–E20 are in [SAM3_EXPERIMENTS.md](SAM3_EXPERIMENTS.md). Core conclusion: SAM3 queries do not improve depth — the FPN path drives all predictions.
+
+---
 
 This document describes the experiments in this fork of iDisc, which investigates whether SAM3 instance-level segmentation queries can improve monocular depth estimation.
 

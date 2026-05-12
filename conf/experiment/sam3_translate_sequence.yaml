@@ -22,12 +22,11 @@ dataset:
 method:
   idr_source: afp
   sam_mode: translate
-  query_source: online
   prompt:
     mode: multiclass
     classes: [vehicle, tree, road, building]
     use_bbox: false
-    strategy: top_k_by_confidence
+    strategy: all
 
 finetune:
   use_sequence_dataset: true
@@ -35,5 +34,7 @@ finetune:
 tags:
   - sam3-pure
   - translate
-  - singleclass
+  - multiclass
   - sequence
+  - sam3-frozen
+  - idisc-scratch

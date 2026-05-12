@@ -3,9 +3,10 @@
 A single SAM3 forward pass produces both an N-level FPN (read directly
 from `state["backbone_out"]["backbone_fpn"]`) and the per-instance
 query embeddings (captured via a forward hook on the SAM3 transformer
-decoder and top-K-selected by `state["scores"]`). The encoder returns
-an (N+1)-tuple `(f_0, ..., f_{N-1}, instance_queries)`; `IDisc.forward`
-peels off the trailing tokens when `yields_instance_queries=True`.
+decoder). All decoder slots are used without top-K filtering. The encoder
+returns an (N+1)-tuple `(f_0, ..., f_{N-1}, instance_queries)`;
+`IDisc.forward` peels off the trailing tokens when
+`yields_instance_queries=True`.
 
 SAM3 internally resizes inputs to its native resolution (~1152²), so
 its native FPN levels are too coarse spatially relative to the iDisc
@@ -39,7 +40,6 @@ class Sam3PixelEncoder(nn.Module):
         prompt_classes: Optional[Sequence[str]] = None,
         freeze_sam3: bool = True,
         load_from_HF: Optional[bool] = None,
-        top_k_queries: int = 32,
         confidence_threshold: float = 0.0,
         **kwargs,
     ):
@@ -52,7 +52,6 @@ class Sam3PixelEncoder(nn.Module):
         self.prompt_mode = prompt_mode
         self.prompt_classes = list(prompt_classes) if prompt_classes else []
         self.confidence_threshold = float(confidence_threshold)
-        self.top_k_queries: int = int(top_k_queries)
 
         if self.prompt_mode == "none":
             raise ValueError(
@@ -164,20 +163,12 @@ class Sam3PixelEncoder(nn.Module):
         std = IMAGENET_STD.to(image.device, image.dtype)
         return ((image * std + mean) * 255.0).clamp(0, 255).to(torch.uint8)
 
-    def _select_topk_queries(self, state) -> torch.Tensor:
-        """Pick top-K decoder hidden states by SAM3's per-slot score.
-        With confidence_threshold=0.0, all 200 slots survive filtering
-        and `state["scores"]` is aligned with the captured hidden
-        states."""
+    def _all_decoder_queries(self) -> torch.Tensor:
         hs = self._decoder_hs_buf
         assert hs is not None, "decoder hook did not fire during set_text_prompt"
         if hs.dim() == 3:
             hs = hs.squeeze(1)  # (num_queries, 256)
-
-        scores = state["scores"].float().flatten()
-        k = min(self.top_k_queries, hs.shape[0])
-        _, top_idx = scores.topk(k)
-        return hs[top_idx].float()
+        return hs.float()
 
     def _run_sam3_once(self, raw_image: torch.Tensor):
         """One image → (fpn list, instance_queries tensor)."""
@@ -196,7 +187,6 @@ class Sam3PixelEncoder(nn.Module):
                 # may occasionally not fire (e.g. when the language path
                 # short-circuits); skip those classes silently.
                 per_class_hs: List[torch.Tensor] = []
-                per_class_scores: List[torch.Tensor] = []
                 for cls in self.prompt_classes:
                     self._decoder_hs_buf = None
                     proc.set_text_prompt(prompt=cls, state=state)
@@ -206,16 +196,11 @@ class Sam3PixelEncoder(nn.Module):
                     if hs.dim() == 3:
                         hs = hs.squeeze(1)
                     per_class_hs.append(hs.float())
-                    per_class_scores.append(state["scores"].float().flatten())
                 assert per_class_hs, "decoder hook did not fire on any prompt class"
-                all_hs = torch.cat(per_class_hs, dim=0)
-                all_sc = torch.cat(per_class_scores, dim=0)
-                k = min(self.top_k_queries, all_hs.shape[0])
-                _, top_idx = all_sc.topk(k)
-                instance_queries = all_hs[top_idx]
+                instance_queries = torch.cat(per_class_hs, dim=0)
             else:
                 proc.set_text_prompt(prompt=self._build_prompt(), state=state)
-                instance_queries = self._select_topk_queries(state)
+                instance_queries = self._all_decoder_queries()
 
         fpn_raw = state["backbone_out"]["backbone_fpn"]
         n_levels = len(self.embed_dims)

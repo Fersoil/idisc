@@ -17,7 +17,7 @@ Reference: pretrained iDisc-R101 baseline, KITTI Eigen val abs_rel = **0.0600** 
 | `e11` | E11 pure replace, single-frame | `finetune_output/E11-online-sam3-pure/` | step 5000 (~2h) |
 | `e12` | E12 translate (Sam3QueryToIDR), single-frame | `finetune_output/E12-online-sam3-translate/` | step 5000 (~2h) |
 | `e13` | E13 pure replace + 4-frame sequence | `finetune_output/E13-online-sam3-sequence/` | step 5000 (~5h) |
-| `e14` | E14 video encoder + 4-frame sequence | `finetune_output/E14-online-sam3-video/` | kill if val keeps rising after step 1000 |
+| `e14` | E14 video encoder + 4-frame sequence | `finetune_output/E14-online-sam3-video/` |  |
 
 ---
 
@@ -140,16 +140,20 @@ Killed at step 4700; best checkpoint at step 4500. ~7.8 min/500 steps on RTX 506
 | Queries | **live** (video encoder branch always was live; unchanged) |
 | Data | `KITTISequenceDataset`, clip=4, stride=4, 5,779 clips |
 
+#### Run 1 — loss divided by `B×T` 
+
+Loss normalised by the full `B×T` frame count regardless of how many frames had LiDAR labels. Since KITTI only labels ~1 in 5 frames, most clips contribute ≤1 valid frame out of 8 — so gradients were deflated by ~`valid/B×T`. Killed early.
+
 **Validation on sequential KITTI**
 
 | Step | abs_rel | d1 | rmse |
 |-----:|--------:|---:|-----:|
-|500|0.312|0.648|7.340|
-|1000|0.233|0.709|6.638|
-|1500|0.251|0.705|6.674|
-|2000|0.231|0.699|6.709|
-|2500|0.223|0.706|6.690|
-|3000|**0.222**|0.682|6.852|
+| 500 | 0.312 | 0.648 | 7.340 |
+| 1000 | 0.233 | 0.709 | 6.638 |
+| 1500 | 0.251 | 0.705 | 6.674 |
+| 2000 | 0.231 | 0.699 | 6.709 |
+| 2500 | 0.223 | 0.706 | 6.690 |
+| 3000 | **0.222** | 0.682 | 6.852 |
 
 Killed at step 3400; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060 Ti.
 
@@ -157,14 +161,35 @@ Killed at step 3400; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060
 
 | Step | abs_rel | d1 | rmse |
 |-----:|--------:|---:|-----:|
-|500|0.270|0.664|6.988|
-|1000|0.268|0.690|6.230|
-|1500|0.202|0.747|5.584|
-|2000|0.179|0.766|5.355|
-|2500|0.171|0.777|5.082|
-|3000|**0.161**|0.753|5.231|
+| 500 | 0.270 | 0.664 | 6.988 |
+| 1000 | 0.268 | 0.690 | 6.230 |
+| 1500 | 0.202 | 0.747 | 5.584 |
+| 2000 | 0.179 | 0.766 | 5.355 |
+| 2500 | 0.171 | 0.777 | 5.082 |
+| 3000 | **0.161** | 0.753 | 5.231 |
 
 Killed at step 3000; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060 Ti.
+
+#### Run 2 — loss divided by `valid_frames`
+
+Loss normalised by the actual number of frames with LiDAR labels (`any(dim=(2,3,4)).sum()`), computed upfront from masks before the forward pass. Gradient scale consistent regardless of label sparsity. Per-frame backward kept for VRAM efficiency. Completed 5000 steps.
+
+**Validation on sequential KITTI**
+
+| Step | abs_rel | d1 | rmse |
+|-----:|--------:|---:|-----:|
+| 500 | 0.283 | 0.670 | 7.136 |
+| 1000 | 0.240 | 0.697 | 6.806 |
+| 1500 | 0.245 | 0.701 | 6.651 |
+| 2000 | 0.232 | 0.703 | 6.680 |
+| 2500 | 0.222 | 0.705 | 6.692 |
+| 3000 | 0.223 | 0.684 | 6.831 |
+| 3500 | 0.224 | 0.695 | 6.759 |
+| 4000 | 0.220 | 0.697 | 6.752 |
+| 4500 | **0.220** | 0.697 | 6.715 |
+| 5000 | 0.220 | 0.699 | 6.683 |
+
+Best abs_rel: **0.2197 at step 4500**. ~47 min/500 steps on RTX 5060 Ti.
 
 ---
 
@@ -173,10 +198,9 @@ Killed at step 3000; best checkpoint at step 3000. ~45 min/500 steps on RTX 5060
 | Exp | Mode | Data | Best abs_rel | Steps | Status |
 |-----|------|------|------------:|------:|--------|
 | E1 baseline | Pretrained iDisc-R101 | — | **0.0600** | ~120k | reference |
-| E11 | replace, live, 5k | single-frame | 0.0839 | 4000 | done (job 60077) |
-| E11 ext | replace, live, 15k | single-frame | **0.0753** | 14500 | done (job 60408) |
-| E12 | translate, live | single-frame | 0.0853 | 4500 | done† (job 60120) |
-| E13 | replace, live | 4-frame sequence | 0.0837 | 4500 | done (job 60121) |
-| E14 | video encoder, live | 4-frame sequence | — | — | not run |
-
-† Killed at step 4900 by time limit; best at step 4500.
+| E11 | replace, live, 5k | single-frame | 0.0839 | 4000 | done |
+| E11 ext | replace, live, 15k | single-frame | **0.0753** | 14500 | done |
+| E12 | translate, live | single-frame | 0.0853 | 4500 | done† |
+| E13 | replace, live | 4-frame sequence | 0.0837 | 4500 | done |
+| E14 run1 | video encoder, live, `/B×T` | 4-frame sequence | 0.222 (seq) / 0.161 (non-seq) | 3000 / 3000 |
+| E14 run2 | video encoder, live, `/valid_frames` | 4-frame sequence | **0.2197** (seq) | 4500 | done |

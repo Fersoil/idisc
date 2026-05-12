@@ -3,7 +3,7 @@
 # Unified SLURM experiment launcher.
 #
 # Usage:
-#   ./scripts/launch.sh <experiment> [--name <label>] [-- <hydra_overrides...>]
+#   ./scripts/launch.sh <experiment> [-- <hydra_overrides...>]
 #
 # Experiments:
 #   baseline    – E1  iDisc-R101 pretrained baseline (eval)
@@ -11,28 +11,31 @@
 #   e12         – E12 SAM3 translate (Sam3QueryToIDR), single-frame
 #   e13         – E13 SAM3 pure replace, 4-frame sequence
 #   e14         – E14 SAM3 video encoder, 4-frame sequence  (needs 16 GB GPU)
+#   baseline-sequence - E1 baseline model on KITTISequenceDataset (eval)
 #
 # Examples:
 #   ./scripts/launch.sh e11
-#   ./scripts/launch.sh e11 --name ablation1
-#   ./scripts/launch.sh e11 --name ablation1 -- finetune.n_iters=100
+#   ./scripts/launch.sh e11 -- finetune.n_iters=100 finetune.val_interval=50
+#   ./scripts/launch.sh e19 -- finetune.lr=1e-4
 #
 set -euo pipefail
 
 IDISC_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 EXPERIMENT="${1:-}"
-shift
 
 if [[ -z "$EXPERIMENT" ]]; then
-    echo "Usage: $0 <experiment> [--name <label>] [-- <hydra_overrides...>]" >&2
-    echo "Experiments: baseline e11 e12 e13 e14" >&2
+    echo "Usage: $0 <experiment> [-- <hydra_overrides...>]" >&2
+    echo "Experiments: baseline basline-sequence e11 e12 e13 e14" >&2
     exit 1
 fi
 
-RUN_NAME=""
+# Split off any Hydra overrides after '--'
 OVERRIDES=()
-[[ $# -gt 0 && "$1" == "--name" ]] && { RUN_NAME="$2"; shift 2; }
-[[ $# -gt 0 && "$1" == "--" ]] && { shift; OVERRIDES=("$@"); }
+shift
+if [[ $# -gt 0 && "$1" == "--" ]]; then
+    shift
+    OVERRIDES=("$@")
+fi
 
 # Per-experiment SLURM settings
 case "$EXPERIMENT" in
@@ -66,6 +69,12 @@ case "$EXPERIMENT" in
         TIME="14:00:00"
         CONSTRAINT="--constraint=5060ti"
         ;;
+    baseline-sequence)
+        JOB_NAME="iDisc-baseline-seq"
+        HYDRA_EXP="baseline_sequence"
+        TIME="2:00:00"
+        CONSTRAINT=""
+        ;;
     *)
         echo "Unknown experiment: $EXPERIMENT" >&2
         echo "Valid: baseline e11 e12 e13 e14" >&2
@@ -76,15 +85,11 @@ esac
 mkdir -p "$IDISC_REPO/logs"
 
 # Build the inner command that SLURM will execute
-if [[ -n "$RUN_NAME" ]]; then
-    OVERRIDES=("+run.wandb_name=${RUN_NAME}" "${OVERRIDES[@]}")
-fi
-
 OVERRIDE_STR=""
 if [[ ${#OVERRIDES[@]} -gt 0 ]]; then
     OVERRIDE_STR=" ${OVERRIDES[*]}"
 fi
-INNER_CMD="python -u scripts/run_with_hydra.py experiment=${HYDRA_EXP} tracking=wandb${OVERRIDE_STR}"
+INNER_CMD="python -u scripts/run_with_hydra.py experiment=${HYDRA_EXP}${OVERRIDE_STR}"
 
 WRAP_CMD="set -euo pipefail
 . /etc/profile.d/modules.sh
@@ -96,6 +101,8 @@ else
 fi
 export CUDA_HOME=\$(dirname \"\$(dirname \"\$(which nvcc)\")\")
 export PYTHONPATH='${IDISC_REPO}:${IDISC_REPO}/sam3:\${PYTHONPATH:-}'
+cd '${IDISC_REPO}/idisc/models/ops'
+pip install .
 cd '${IDISC_REPO}'
 ${INNER_CMD}"
 

@@ -56,7 +56,7 @@ def init_tracking(cfg: Any, run_dir: str | Path):
         project=tracking_cfg.get("project", "idisc"),
         entity=tracking_cfg.get("entity"),
         mode=tracking_cfg.get("mode", "online"),
-        name=run_cfg.get("name", run_cfg.get("exp_id")),
+        name=run_cfg.get("wandb_name") or run_cfg.get("name") or run_cfg.get("exp_id"),
         tags=tags,
         dir=str(Path(run_dir).resolve()),
         config=cfg_dict,

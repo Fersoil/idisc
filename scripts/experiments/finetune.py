@@ -406,7 +406,10 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 depths = batch["depths"].to(device)  # (B, T, 1, H, W)
                 masks  = batch["masks"].to(device)   # (B, T, 1, H, W)
                 B, T = images.shape[:2]
-                n_samples = B * T
+
+                valid_frames = int(masks.bool().any(dim=(2, 3, 4)).sum().item())
+                if valid_frames == 0:
+                    continue
 
                 for b in range(B):
                     clip = images[b]   # (T, 3, H, W)
@@ -445,22 +448,12 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                                 gt=gt_t,
                                 mask=mask_t,
                             )
-                            loss = sum(v for v in losses["opt"].values()) # / n_samples
+                            loss = sum(v for v in losses["opt"].values())
 
-                        loss.backward()
-                        frame_loss = loss.item()
+                        (loss / valid_frames).backward()
+                        total_loss += loss.item()
 
-                        if use_wandb and wandb.run is not None:
-                            lr_now = scheduler.get_last_lr()[0]
-                            wandb.log({"train_video/loss": frame_loss, "train_video/lr": lr_now}, step=step)
-
-                        total_loss += frame_loss
-                        valid_frames += 1
-
-                if valid_frames == 0:
-                    continue
-
-                total_loss /= valid_frames 
+                total_loss /= valid_frames
 
             else:
                 # Standard (image-encoder) path.
@@ -493,19 +486,16 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                             gt=gt[idx:idx + 1],
                             mask=mask[idx:idx + 1],
                         )
-                        loss = sum(v for v in losses["opt"].values()) # / n_samples
+                        loss = sum(v for v in losses["opt"].values())
 
-                    total_loss += loss
+                    (loss / n_samples).backward()
+                    total_loss += loss.item()
                     valid_frames += 1
 
                 if valid_frames == 0:
                     continue
 
-                mean_loss = total_loss / valid_frames
-                mean_loss.backward()
-
-                total_loss = mean_loss.item()
-
+                total_loss /= valid_frames
 
             nn.utils.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()

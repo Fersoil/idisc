@@ -1,6 +1,6 @@
 enabled: true
 backend: wandb
-project: idisc-sam3
+project: idisc-finetune
 entity: null
 mode: online
 tags: []

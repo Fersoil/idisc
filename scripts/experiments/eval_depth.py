@@ -134,6 +134,31 @@ def main():
     args = parser.parse_args()
 
 
+def visualize (attn_matrix, img, name, save_path):
+    import matplotlib.pyplot as plt
+    import math
+    import numpy as np
+    import matplotlib as mpl
+
+    if len(attn_matrix.shape) == 3:
+        attn_matrix.squeeze()
+    num_idrs = attn_matrix.shape[-1]
+
+    most_attended_idr = torch.argmax(attn_matrix, dim=-1).squeeze()
+    assert(len(most_attended_idr.shape) == 1)
+
+    num_pixels = len(most_attended_idr)
+    h, w = img.shape[-2], img.shape[-1]
+    scale = int(math.sqrt(h*w / num_pixels))
+    most_attended_idr = most_attended_idr.reshape((h // scale, w // scale))
+
+    fig, axs = plt.subplots(2, 1, figsize=(6, 6))
+    
+    axs[0].imshow(img.cpu().numpy().squeeze().transpose(1,2,0)) 
+    axs[1].matshow(most_attended_idr.cpu(), cmap='viridis', vmin=0, vmax=num_idrs-1)
+    plt.savefig(os.path.join(save_path, "figs", name))
+
+
 def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
     variant = cfg["variant"]
     prompt_mode = cfg.get("prompt_mode", "multiclass")
@@ -146,6 +171,7 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
             config = json.load(f)
 
     os.makedirs(cfg["output_dir"], exist_ok=True)
+    os.makedirs(os.path.join(cfg["output_dir"], "figs"), exist_ok=True)
     device = torch.device("cuda") if tcuda.is_available() else torch.device("cpu")
 
     print(f"Variant:    {variant}", flush=True)
@@ -235,15 +261,27 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
                 sam_mode = "concat"
 
             with context:
-                pred, _, _ = model(data,
+                pred, _, meta = model(data,
                                    instance_queries=instance_queries,
                                    raw_idrs=raw_idrs,
                                    sam_mode=sam_mode,
                                    gt=gt, mask=mask)
+                                   
+                idrs = meta["queries"]
+                
+                # Visualize pixel to IDR attention from the batch at all resolutions for the last image of the batch
+                for res_num in range(model.num_resolutions):
+                    head = getattr(model.isd, f"head_{res_num+1}")
+                    head_depth = head.depth
+                    attn_module = getattr(head, f"cross_attn_{head_depth}")
+                    attn_matrix = getattr(attn_module, "attn")
+                    
+                    visualize(attn_matrix.clone(), data[-1].clone(), save_path=cfg["output_dir"], name=f"{i:03}_{res_num+1}.png")
+
 
             metrics_tracker.accumulate_metrics(
                 gt.permute(0, 2, 3, 1), pred.permute(0, 2, 3, 1), mask.permute(0, 2, 3, 1))
-
+     
             if (i + 1) % 100 == 0:
                 print(f"  {i+1}/{len(valid_loader)}", flush=True)
 

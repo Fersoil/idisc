@@ -1,0 +1,232 @@
+_wandb:
+    value:
+        cli_version: 0.26.1
+        e:
+            0568g1zwh2zpv5a2zxra1s2oamje3tyw:
+                args:
+                    - experiment=baseline
+                codePath: scripts/run_with_hydra.py
+                codePathLocal: scripts/run_with_hydra.py
+                cpu_count: 28
+                cpu_count_logical: 28
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "73861140480"
+                        used: "50633293824"
+                email: lovro.nidogon@gmail.com
+                executable: /home/lnidogon/idisc/.venv/bin/python
+                git:
+                    commit: d31d23306db88b7800c5721ba6d7075928f334be
+                    remote: git@github.com:Fersoil/idisc.git
+                gpu: NVIDIA GeForce RTX 5060 Ti
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Blackwell
+                      cudaCores: 4608
+                      memoryTotal: "17103323136"
+                      name: NVIDIA GeForce RTX 5060 Ti
+                      uuid: GPU-17dd7135-a497-c124-40bc-42e326ed7ce5
+                host: studgpu-node17.inf.ethz.ch
+                memory:
+                    total: "270342361088"
+                os: Linux-6.14.0-35-generic-x86_64-with-glibc2.39
+                program: /home/lnidogon/idisc/scripts/run_with_hydra.py
+                python: CPython 3.12.3
+                root: /home/lnidogon/idisc
+                slurm:
+                    cluster_name: cluster
+                    conf: /etc/slurm/slurm.conf
+                    cpus_on_node: "2"
+                    gpus: "1"
+                    gpus_on_node: "1"
+                    gtids: "0"
+                    job_account: 3dv
+                    job_cpus_per_node: "2"
+                    job_end_time: "1778700938"
+                    job_gid: "536665"
+                    job_gpus: "6"
+                    job_id: "68760"
+                    job_name: iDisc-baseline
+                    job_nodelist: studgpu-node17
+                    job_num_nodes: "1"
+                    job_partition: jobs
+                    job_qos: 3dv-team17
+                    job_start_time: "1778693738"
+                    job_uid: "654953"
+                    job_user: lnidogon
+                    jobid: "68760"
+                    localid: "0"
+                    mem_per_node: "24576"
+                    nnodes: "1"
+                    nodeid: "0"
+                    nodelist: studgpu-node17
+                    oom_kill_step: "0"
+                    prio_process: "0"
+                    procid: "0"
+                    submit_dir: /home/lnidogon/idisc
+                    submit_host: student-cluster1.inf.ethz.ch
+                    task_pid: "1729387"
+                    tasks_per_node: "1"
+                    topology_addr: studgpu-node17
+                    topology_addr_pattern: node
+                startedAt: "2026-05-13T17:35:52.652788Z"
+                writerId: 0568g1zwh2zpv5a2zxra1s2oamje3tyw
+        m: []
+        python_version: 3.12.3
+        t:
+            "1":
+                - 1
+                - 41
+                - 49
+                - 50
+                - 63
+            "2":
+                - 1
+                - 41
+                - 49
+                - 50
+                - 63
+            "3":
+                - 16
+            "4": 3.12.3
+            "5": 0.26.1
+            "12": 0.26.1
+            "13": linux-x86_64
+data:
+    value:
+        augmentations:
+            autocontrast_p: 0
+            brightness_p: 1
+            contrast_p: 1
+            equalize_p: 0
+            gamma_p: 1
+            horizontal_flip: 0.5
+            hue_p: 1
+            posterize_p: 0
+            random_brightness: 0.1
+            random_contrast: 0.1
+            random_gamma: 0.2
+            random_hue: 0.1
+            random_posterize: 4
+            random_rotation: 2.5
+            random_saturation: 0.1
+            random_scale: 0.05
+            random_sharpness: 0.1
+            random_solarize: 0.2
+            random_translation: 0.05
+            rotation_p: 1
+            saturation_p: 1
+            scale_p: 1
+            sharpness_p: 0
+            solarize_p: 0
+            translation_p: 0
+        benchmark: false
+        clip_length: 4
+        crop: garg
+        data_root: datasets/kitti
+        manifest_path: splits/kitti/sequence_manifest.json
+        train_dataset: KITTIDataset
+        val_dataset: KITTIDataset
+dataset:
+    value:
+        dataset_name: kitti
+        legacy_config_path: configs/kitti/kitti_r101.json
+finetune:
+    value:
+        batch_size: 2
+        encoder_owns_sam3: false
+        lr: 5e-05
+        n_iters: 5000
+        output_dir: /home/lnidogon/idisc/finetune_output/E1-baseline
+        prompt_mode: none
+        sam_mode: none
+        use_sequence_dataset: false
+        val_interval: 500
+generic:
+    value:
+        seed: 13
+method:
+    value:
+        idr_source: afp
+        prompt:
+            classes: []
+            mode: none
+            strategy: no_sam
+            use_bbox: false
+        prompt_mode: none
+        sam_mode: none
+model:
+    value:
+        activation: gelu
+        afp:
+            context_low_resolutions_skip: 1
+            depths: 2
+            latent_dim: 128
+            num_latents: 32
+        attn_dec: true
+        expansion: 4
+        isd:
+            depths: 2
+            latent_dim: 128
+            num_resolutions: 3
+        num_heads: 1
+        output_dim: 1
+        pixel_decoder:
+            anchor_points: 8
+            depths: 6
+            heads: 4
+            hidden_dim: 256
+        pixel_encoder:
+            img_size:
+                - 1216
+                - 352
+            lr_dedicated: 5e-05
+            name: resnet101
+paths:
+    value:
+        base_path: /work/courses/3dv/team17/idisc
+        finetuning_dir: /work/courses/3dv/team17/idisc/finetuning
+        kitti_root: /work/courses/3dv/team17/idisc/datasets/kitti
+        outputs_root: outputs/runs
+        pretrained_model: /work/courses/3dv/team17/models/kitti_resnet101.pt
+        sam_checkpoint: /work/courses/3dv/team17/sam3_checkpoints/sam3.pt
+        sequence_manifest: splits/kitti/sequence_manifest.json
+prompt:
+    value:
+        classes: []
+        mode: none
+        strategy: no_sam
+        use_bbox: false
+prompt_mode:
+    value: none
+run:
+    value:
+        exp_id: E1-baseline
+        git_branch: baseline-seq
+        git_commit: d31d233
+        name: E1-baseline
+        run_dir: /home/lnidogon/idisc/outputs/runs/2026-05-13_19-35-52_E1-baseline_d31d233
+        task: finetune
+tags:
+    value:
+        - baseline
+tracking:
+    value:
+        backend: none
+        enabled: false
+training:
+    value:
+        batch_size: 2
+        div_factor: 1
+        final_div_factor: 10
+        loss:
+            name: SILog
+            weight: 10
+        lr: 0.0002
+        n_iters: 40000
+        nsteps_accumulation_gradient: 2
+        validation_interval: 200
+        wd: 0.05
+variant:
+    value: baseline

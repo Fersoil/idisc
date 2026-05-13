@@ -220,7 +220,8 @@ def _resolve_finetune_mode(cfg: dict[str, Any]) -> str:
         return "translate"
     if variant in {"sam-concat", "concat", "replace"}:
         return "concat" if variant != "replace" else "replace"
-
+    if variant == "baseline":
+        return "none"
     raise ValueError(f"Cannot infer finetune mode from variant={variant!r}")
 
 
@@ -238,7 +239,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     encoder_owns_sam3 = encoder_name in ("sam3_image", "sam3_video")
     encoder_is_video = encoder_name == "sam3_video"
 
-    if not encoder_owns_sam3 and sam_checkpoint is None:
+    if not encoder_owns_sam3 and sam_checkpoint is None and sam_mode != "none":
         raise ValueError("sam_checkpoint is required for non-SAM3-encoder variants")
 
     if cfg.get("use_sequence_dataset"):
@@ -319,12 +320,20 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 param.requires_grad = False
     else:
         # Legacy fine-tune: freeze everything except sam3_proj and ISD.
-        for param in model.parameters():
-            param.requires_grad = False
-        for param in model.sam3_proj.parameters():
-            param.requires_grad = True
-        for param in model.isd.parameters():
-            param.requires_grad = True
+        if sam_mode == "none":
+            for param in model.parameters():
+                param.requires_grad = False
+            for param in model.sam3_proj.parameters():
+                param.requires_grad = True
+            for param in model.isd.parameters():
+                param.requires_grad = True
+        else:
+            for param in model.parameters():
+                param.requires_grad = False
+            for param in model.sam3_proj.parameters():
+                param.requires_grad = True
+            for param in model.isd.parameters():
+                param.requires_grad = True
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())

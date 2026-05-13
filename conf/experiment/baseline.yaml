@@ -2,7 +2,7 @@
 
 run:
   exp_id: E1-baseline
-  task: eval
+  task: finetune
 
 method:
   idr_source: afp

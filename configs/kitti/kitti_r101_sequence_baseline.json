@@ -82,6 +82,10 @@
             "depths": 2,
             "latent_dim": 128,
             "num_latents": 32
-        }
+        },
+        
+        "run": {
+        "task": "finetune"
+    }
     }
 }

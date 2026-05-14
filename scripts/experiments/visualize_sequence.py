@@ -262,13 +262,7 @@ def run_sequence_visualization(cfg: dict) -> None:
     model = model.to(device).eval()
     print(f"Model loaded — {num_heads} heads, {model.afp.num_resolutions} AFP resolutions")
 
-    if cfg.get("clip_length") is not None:
-        config["data"]["clip_length"] = cfg["clip_length"]
-        with open(cfg["config_file"], "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
-        print(f"Updated clip_length → {cfg['clip_length']} in {cfg['config_file']}")
-
-    clip_length = config["data"].get("clip_length", 4)
+    clip_length = cfg["clip_length"] if cfg.get("clip_length") is not None else config["data"].get("clip_length", 4)
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     dataset = KITTISequenceDataset(
         test_mode=True,

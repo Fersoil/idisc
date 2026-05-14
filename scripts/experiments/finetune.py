@@ -380,8 +380,21 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
         pct_start=0.1, div_factor=10, final_div_factor=100,
     )
 
-    f16 = config["training"].get("f16", False)
-    context = torch.autocast(device_type="cuda", dtype=torch.float16, enabled=f16)
+    # Depth-head autocast dtype. Precedence: finetune.amp_dtype (Hydra) >
+    # training.f16 (legacy JSON flag) > default bfloat16.
+    _amp_dtype_str = finetune_cfg.get(
+        "amp_dtype",
+        "float16" if config["training"].get("f16", False) else "bfloat16",
+    )
+    _DTYPE_MAP = {"bfloat16": torch.bfloat16, "float16": torch.float16,
+                  "float32": torch.float32, "fp32": torch.float32}
+    _amp_torch_dtype = _DTYPE_MAP.get(_amp_dtype_str, torch.bfloat16)
+    _amp_enabled = device.type == "cuda" and _amp_torch_dtype != torch.float32
+    context = torch.autocast(device_type=device.type if _amp_enabled else "cpu",
+                             dtype=_amp_torch_dtype, enabled=_amp_enabled)
+    print(f"  AMP dtype: {_amp_dtype_str} (enabled={_amp_enabled})", flush=True)
+
+    torch.backends.cudnn.benchmark = True  # fixed KITTI input sizes → faster kernels
     best_abs_rel = np.inf
 
     print(f"\nStart fine-tuning for {n_iters} iterations (lr={lr})...", flush=True)
@@ -415,20 +428,31 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                     clip = images[b]   # (T, 3, H, W)
                     # encoder.forward(clip) → (*FPN_T, queries_T)
                     enc_out = model.pixel_encoder(clip)
-                    # Last element is queries (T, K, 256); rest are FPN levels
-                    fpn_levels = enc_out[:-1]      # each (T, C, h, w)
-                    queries_T  = enc_out[-1]       # (T, K, 256)
+                    # Last element is queries (T, K, 256); rest are FPN levels.
+                    # Clone into per-frame tensors immediately so the stacked
+                    # (T, ...) buffers can be freed before the depth-head loop.
+                    fpn_levels = enc_out[:-1]
+                    queries_T  = enc_out[-1]
+                    per_frame_data = [
+                        (
+                            tuple(lvl[t : t + 1].clone() for lvl in fpn_levels),
+                            queries_T[t].clone(),
+                        )
+                        for t in range(T)
+                    ]
+                    del enc_out, fpn_levels, queries_T
+                    torch.cuda.empty_cache()
 
                     for t in range(T):
                         gt_t   = depths[b, t : t + 1]     # (1, 1, H, W)
                         mask_t = masks[b, t : t + 1]      # (1, 1, H, W)
                         if mask_t.bool().sum() == 0:
+                            per_frame_data[t] = None
                             continue
 
-                        # Provide the pre-extracted single-frame FPN to iDisc.
-                        frame_fpn = tuple(
-                            lvl[t : t + 1] for lvl in fpn_levels
-                        )
+                        frame_fpn, iq = per_frame_data[t]
+                        per_frame_data[t] = None  # release before backward
+
                         # iDisc.forward needs the FPN in encoder output order
                         # (high-res first); invert_encoder_output_order then
                         # pixel_decoder handle the rest.  Pre-extracted FPN
@@ -436,8 +460,6 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                         # pass via pre_extracted_encoder_outputs after
                         # re-inverting so the model inverts it back.
                         inv_frame_fpn = tuple(reversed(frame_fpn))
-
-                        iq = queries_T[t]   # (K, 256)
 
                         with context:
                             pred, losses, _ = model(
@@ -450,7 +472,9 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                             )
                             loss = sum(v for v in losses["opt"].values())
 
+                        del frame_fpn, iq, inv_frame_fpn
                         (loss / valid_frames).backward()
+                        torch.cuda.empty_cache()
                         total_loss += loss.item()
 
                 total_loss /= valid_frames

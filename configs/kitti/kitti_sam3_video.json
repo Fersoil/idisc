@@ -81,7 +81,8 @@
             "freeze_sam3": true,
             "use_presence_score": true,
             "top_k_queries": 200,
-            "confidence_threshold": 0.0,
+            "confidence_threshold": 0.3,
+            "max_instances": 30,
             "prompt_mode": "multiclass",
             "prompt_classes": [
                 "vehicle",

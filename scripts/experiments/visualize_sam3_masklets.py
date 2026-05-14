@@ -293,6 +293,7 @@ def run_clip(model, images, depths, masks, capture, num_heads,
     frames = []
 
     with torch.no_grad():
+        enc.track_masklets = True
         enc_out    = enc(images)           # fills enc._masklets_per_frame
         fpn_levels = enc_out[:-1]
         queries_T  = enc_out[-1]

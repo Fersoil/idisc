@@ -1,0 +1,14 @@
+python scripts/experiments/visualize_sam3_masklets.py        --config-file configs/kitti/kitti_sam3_video.json     --model-file finetune_output/E20-sam3-pure-multiclass/best_sam_finetuned.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode replace --output-dir outputs/runs/viz_masklets --start-clip 50 --fps 1 --num-masklets 9
+
+
+python scripts/experiments/visualize_sam3_masklets.py        --config-file configs/kitti/kitti_sam3_translate_sequence.json     --model-file /work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam_finetuned.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode translate --output-dir outputs/runs/viz_masklets --start-clip 50 --fps 1 --num-masklets 9
+ --fps 1 --num-masklets 9
+
+ python scripts/experiments/visualize_sam3.py        --config-file configs/kitti/kitti_sam3_video.json      --model-file /work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam_finetuned.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode translate --output-dir outputs/runs/viz_sam3 --start-clip 50 --fps 1
+
+
+ python scripts/experiments/visualize_sequence.py        --config-file configs/kitti/kitti_sam3_video.json     --model-file finetune_output/E20-sam3-pure-multiclass/best_sam_finetuned.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode replace --output-dir outputs/runs/viz_seq_video --start-clip 50 --fps 1 
+ python scripts/experiments/visualize_sequence.py        --config-file configs/kitti/kitti_sam3.json     --model-file finetune_output/E20-sam3-pure-multiclass/best_sam_finetuned.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode replace --output-dir outputs/runs/viz_seq --start-clip 50 --fps 1 
+ python scripts/experiments/visualize_sequence.py        --config-file configs/kitti/kitti_sam3_video.json     --model-file /work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam_finetuned.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode translate --output-dir outputs/runs/viz_seq_video --start-clip 50 --fps 1 
+ python scripts/experiments/visualize_sequence.py        --config-file configs/kitti/kitti_sam3_translate.json     --model-file /work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam_finetuned.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode translate --output-dir outputs/runs/viz_seq --start-clip 50 --fps 1
+python scripts/experiments/visualize_sequence.py        --config-file configs/kitti/kitti_r101.json     --model-file /work/courses/3dv/team17/models/kitti_resnet101.pt       --base-path   /work/courses/3dv/team17/idisc --num-clips 3  --clip-length 4 --sam-mode none --output-dir outputs/runs/viz_seq --start-clip 50 --fps 1

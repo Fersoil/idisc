@@ -200,10 +200,13 @@ def _init_images(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, isd_label
         if col in asgns:
             axes[1, col].set_title(f"{isd_label} — res {col + 1}", fontsize=12)
             axes[1, col].axis("off")
-            im_asgns.append(axes[1, col].imshow(
-                asgns[col], cmap=cmap_idr, norm=norm_idr,
-                vmin=vmin_idr, vmax=vmax_idr, interpolation=interp,
-            ))
+            kwargs = {"cmap": cmap_idr, "interpolation": interp}
+            if norm_idr is not None:
+                kwargs["norm"] = norm_idr
+            else:
+                kwargs["vmin"] = vmin_idr
+                kwargs["vmax"] = vmax_idr
+            im_asgns.append(axes[1, col].imshow(asgns[col], **kwargs))
 
     return {"rgb": im_rgb, "depth": im_d, "gt": im_gt, "asgns": im_asgns}
 

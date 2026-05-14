@@ -269,14 +269,6 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
                                    
                 idrs = meta["queries"]
                 
-                # Visualize pixel to IDR attention from the batch at all resolutions for the last image of the batch
-                for res_num in range(model.num_resolutions):
-                    head = getattr(model.isd, f"head_{res_num+1}")
-                    head_depth = head.depth
-                    attn_module = getattr(head, f"cross_attn_{head_depth}")
-                    attn_matrix = getattr(attn_module, "attn")
-                    
-                    visualize(attn_matrix.clone(), data[-1].clone(), save_path=cfg["output_dir"], name=f"{i:03}_{res_num+1}.png")
 
 
             metrics_tracker.accumulate_metrics(

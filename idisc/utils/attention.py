@@ -77,7 +77,6 @@ class AttentionLayer(nn.Module):
         else:
             attn = F.softmax(similarity_matrix, dim=-1)
 
-        self.attn = attn
         attn = self.dropout(attn)
 
         out = torch.einsum("bij, bjd -> bid", attn, v)

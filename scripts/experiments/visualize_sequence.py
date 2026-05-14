@@ -40,7 +40,16 @@ from idisc.models.idisc import IDisc
 # Per-frame inference
 # ---------------------------------------------------------------------------
 
-def _run_clip(model, images, depths, masks, capture, device, clip_idx=0, seq_id=""):
+_ISD_LABELS = {
+    "none":      "AFP IDR assignment",
+    "replace":   "SAM3 IDR assignment",
+    "concat":    "AFP+SAM3 IDR assignment",
+    "translate": "SAM3→IDR assignment",
+}
+
+
+def _run_clip(model, images, depths, masks, capture, device,
+              clip_idx=0, seq_id="", sam_mode="none"):
     """
     Run inference on one clip (T, 3, H, W).  Handles both video encoders
     (full-clip backbone call, then per-frame dispatch) and image encoders
@@ -73,11 +82,12 @@ def _run_clip(model, images, depths, masks, capture, device, clip_idx=0, seq_id=
                 pred, _, _ = model(
                     frame,
                     instance_queries=iq,
+                    sam_mode=sam_mode,
                     pre_extracted_encoder_outputs=inv_frame_fpn,
                     gt=gt, mask=msk,
                 )
             else:
-                pred, _, _ = model(frame, gt=gt, mask=msk)
+                pred, _, _ = model(frame, sam_mode=sam_mode, gt=gt, mask=msk)
 
             frames.append({
                 "image":    denormalize_imagenet(frame[0]),
@@ -149,7 +159,8 @@ def _idr_cmap_norm(num_idrs):
     return cmap, norm
 
 
-def _fill_axes(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr):
+def _fill_axes(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr,
+               isd_label="IDR assignment"):
     """
     Layout:
       row 0: [RGB | depth pred | GT depth]   — shared plasma scale; zeros masked grey
@@ -175,19 +186,19 @@ def _fill_axes(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, n
             im = axes[1, col].imshow(
                 asgns[col], cmap=cmap_idr, norm=norm_idr, interpolation="nearest"
             )
-            axes[1, col].set_title(f"ISD dominant IDR — res {col + 1}", fontsize=12)
+            axes[1, col].set_title(f"{isd_label} — res {col + 1}", fontsize=12)
             axes[1, col].axis("off")
             im_asgns.append(im)
 
     return im_d, im_gt, im_asgns
 
 
-def _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, path):
+def _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, isd_label, path):
     cmap_depth = _depth_cmap()
     cmap_idr, norm_idr = _idr_cmap_norm(num_idrs)
     fig, axes = _make_axes()
     im_d, im_gt, im_asgns = _fill_axes(
-        axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr
+        axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr, isd_label
     )
     fig.colorbar(im_d, ax=axes[0, 2], location="right", shrink=0.9, label="depth (m)")
     if im_asgns:
@@ -203,16 +214,25 @@ def _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, path):
 
 def _make_writer(fmt: str, fps: int):
     if fmt == "mp4":
+        import shutil
+        if shutil.which("ffmpeg") is None:
+            try:
+                import imageio_ffmpeg
+                plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
+            except ImportError:
+                print("Warning: ffmpeg not found and imageio-ffmpeg not installed. "
+                      "Run: pip install imageio imageio-ffmpeg  — falling back to GIF.")
+                return PillowWriter(fps=fps)
         return FFMpegWriter(fps=fps, metadata={"title": "IDR sequence"})
     return PillowWriter(fps=fps)
 
 
-def _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, path, fps, fmt="gif"):
+def _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, isd_label, path, fps, fmt="gif"):
     cmap_depth = _depth_cmap()
     cmap_idr, norm_idr = _idr_cmap_norm(num_idrs)
     fig, axes = _make_axes()
     im_d, im_gt, im_asgns = _fill_axes(
-        axes, frames_data[0], num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr
+        axes, frames_data[0], num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr, isd_label
     )
     fig.colorbar(im_d, ax=axes[0, 2], location="right", shrink=0.9, label="depth (m)")
     if im_asgns:
@@ -263,20 +283,24 @@ def run_sequence_visualization(cfg: dict) -> None:
     start_clip  = cfg.get("start_clip", 0)
     fps         = cfg.get("fps", 2)
     fmt         = cfg.get("format", "gif")
+    sam_mode    = cfg.get("sam_mode", "none")
 
     model = IDisc.build(config)
     model.load_pretrained(cfg["model_file"])
     model = model.to(device).eval()
     print(f"Model loaded — {num_heads} heads, {model.afp.num_resolutions} AFP resolutions")
 
-    model_tag = Path(cfg["config_file"]).stem
+    model_tag = f"{Path(cfg['config_file']).stem}  sam_mode={sam_mode}"
+    isd_label = _ISD_LABELS.get(sam_mode, "IDR assignment")
 
     clip_length = cfg["clip_length"] if cfg.get("clip_length") is not None else config["data"].get("clip_length", 4)
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     dataset = KITTISequenceDataset(
         test_mode=True,
         base_path=data_path,
-        manifest_path=os.path.join(cfg["base_path"], config["data"]["manifest_path"]),
+        manifest_path=os.path.join(cfg["base_path"],
+                                   cfg.get("manifest_path") or
+                                   config["data"].get("manifest_path", "splits/kitti/sequence_manifest.json")),
         clip_length=clip_length,
         crop=config["data"]["crop"],
     )
@@ -302,7 +326,7 @@ def run_sequence_visualization(cfg: dict) -> None:
         T          = images.shape[0]
 
         print(f"\nClip {clip_idx}  seq={seq_id}  frames={clip['frame_indices']}")
-        frames_data = _run_clip(model, images, depths, masks, capture, device, clip_idx, seq_id)
+        frames_data = _run_clip(model, images, depths, masks, capture, device, clip_idx, seq_id, sam_mode)
         print(f"  {T} frames collected")
 
         # Compute global ranges once so colormaps are consistent across frames
@@ -317,11 +341,11 @@ def run_sequence_visualization(cfg: dict) -> None:
 
         for t, fd in enumerate(frames_data):
             png_path = clip_dir / f"frame_{t:03d}.png"
-            _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, png_path)
+            _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, isd_label, png_path)
             print(f"  saved {png_path.name}")
 
-        anim_path = output_dir / f"clip_{clip_idx:03d}_{seq_id}.{fmt}"
-        _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, anim_path, fps, fmt)
+        anim_path = output_dir / f"clip_{clip_idx:03d}_{seq_id}_{sam_mode}.{fmt}"
+        _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, isd_label, anim_path, fps, fmt)
         print(f"  saved {anim_path.name}")
 
     capture.remove()
@@ -337,8 +361,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-clips",   type=int, default=3)
     parser.add_argument("--start-clip",  type=int, default=0,
                         help="Index of the first clip in the dataset to visualize")
+    parser.add_argument("--manifest-path", default=None,
+                        help="Override manifest path (default: read from config or "
+                             "splits/kitti/sequence_manifest.json)")
     parser.add_argument("--clip-length", type=int, default=None,
                         help="Override clip_length in the config JSON and save it back")
+    parser.add_argument("--sam-mode", default="none",
+                        choices=["none", "replace", "concat", "translate"])
     parser.add_argument("--fps",    type=int, default=2)
     parser.add_argument("--format", default="gif", choices=["gif", "mp4"],
                         help="Output format — gif has centisecond delay resolution "
@@ -354,7 +383,9 @@ def main() -> None:
         "base_path":    args.base_path,
         "output_dir":   args.output_dir,
         "num_clips":    args.num_clips,
-        "start_clip":   args.start_clip,
+        "start_clip":    args.start_clip,
+        "sam_mode":      args.sam_mode,
+        "manifest_path": args.manifest_path,
         "clip_length":  args.clip_length,
         "fps":          args.fps,
         "format":       args.format,

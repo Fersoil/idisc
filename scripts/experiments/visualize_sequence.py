@@ -182,7 +182,7 @@ def _fill_axes(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, n
     return im_d, im_gt, im_asgns
 
 
-def _save_frame_png(fd, num_heads, depth_max, num_idrs, path):
+def _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, path):
     cmap_depth = _depth_cmap()
     cmap_idr, norm_idr = _idr_cmap_norm(num_idrs)
     fig, axes = _make_axes()
@@ -195,6 +195,8 @@ def _save_frame_png(fd, num_heads, depth_max, num_idrs, path):
         cb.set_label("IDR index")
         step = max(1, num_idrs // 10)
         cb.set_ticks(range(0, num_idrs, step))
+    clip_info = f"clip {fd.get('clip_idx', '')}  {fd.get('seq_id', '')}"
+    fig.suptitle(f"{clip_info}\n{model_tag}", fontsize=11)
     fig.savefig(path, dpi=100)
     plt.close(fig)
 
@@ -205,7 +207,7 @@ def _make_writer(fmt: str, fps: int):
     return PillowWriter(fps=fps)
 
 
-def _save_gif(frames_data, num_heads, depth_max, num_idrs, path, fps, fmt="gif"):
+def _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, path, fps, fmt="gif"):
     cmap_depth = _depth_cmap()
     cmap_idr, norm_idr = _idr_cmap_norm(num_idrs)
     fig, axes = _make_axes()
@@ -218,8 +220,11 @@ def _save_gif(frames_data, num_heads, depth_max, num_idrs, path, fps, fmt="gif")
         cb.set_label("IDR index")
         step = max(1, num_idrs // 10)
         cb.set_ticks(range(0, num_idrs, step))
-    seq_id = frames_data[0].get("seq_id", "")
-    sup = fig.suptitle(f"clip {frames_data[0].get('clip_idx', '')}  {seq_id}  — frame 1", fontsize=13)
+    fd0    = frames_data[0]
+    sup = fig.suptitle(
+        f"clip {fd0.get('clip_idx', '')}  {fd0.get('seq_id', '')}  — frame 1\n{model_tag}",
+        fontsize=11,
+    )
 
     def update(t):
         fd    = frames_data[t]
@@ -230,7 +235,9 @@ def _save_gif(frames_data, num_heads, depth_max, num_idrs, path, fps, fmt="gif")
         for col, im in enumerate(im_asgns):
             im.set_data(asgns[col])
         fd = frames_data[t]
-        sup.set_text(f"clip {fd.get('clip_idx', '')}  {fd.get('seq_id', '')}  — frame {t + 1}/{len(frames_data)}")
+        sup.set_text(
+            f"clip {fd.get('clip_idx', '')}  {fd.get('seq_id', '')}  — frame {t + 1}/{len(frames_data)}\n{model_tag}"
+        )
         return [im_d, im_gt, *im_asgns, sup]
 
     anim = animation.FuncAnimation(
@@ -261,6 +268,8 @@ def run_sequence_visualization(cfg: dict) -> None:
     model.load_pretrained(cfg["model_file"])
     model = model.to(device).eval()
     print(f"Model loaded — {num_heads} heads, {model.afp.num_resolutions} AFP resolutions")
+
+    model_tag = Path(cfg["config_file"]).stem
 
     clip_length = cfg["clip_length"] if cfg.get("clip_length") is not None else config["data"].get("clip_length", 4)
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
@@ -308,11 +317,11 @@ def run_sequence_visualization(cfg: dict) -> None:
 
         for t, fd in enumerate(frames_data):
             png_path = clip_dir / f"frame_{t:03d}.png"
-            _save_frame_png(fd, num_heads, depth_max, num_idrs, png_path)
+            _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, png_path)
             print(f"  saved {png_path.name}")
 
         anim_path = output_dir / f"clip_{clip_idx:03d}_{seq_id}.{fmt}"
-        _save_gif(frames_data, num_heads, depth_max, num_idrs, anim_path, fps, fmt)
+        _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, anim_path, fps, fmt)
         print(f"  saved {anim_path.name}")
 
     capture.remove()

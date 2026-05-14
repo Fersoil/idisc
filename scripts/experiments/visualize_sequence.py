@@ -49,7 +49,7 @@ _ISD_LABELS = {
 
 
 def _run_clip(model, images, depths, masks, capture, device,
-              clip_idx=0, seq_id="", sam_mode="none"):
+              clip_idx=0, seq_id="", sam_mode="none", num_heads=1):
     """
     Run inference on one clip (T, 3, H, W).  Handles both video encoders
     (full-clip backbone call, then per-frame dispatch) and image encoders
@@ -89,6 +89,15 @@ def _run_clip(model, images, depths, masks, capture, device,
             else:
                 pred, _, _ = model(frame, sam_mode=sam_mode, gt=gt, mask=msk)
 
+            for res_idx, attn_bh in capture.isd_attn.items():
+                attn    = _extract_sample(attn_bh, num_heads, sample_idx=0)  # (N_pixels, N_IDR)
+                max_prob = attn.max(dim=-1).values.mean().item()
+                entropy  = -(attn * (attn + 1e-9).log()).sum(dim=-1).mean().item()
+                uniform  = 1.0 / attn.shape[-1]
+                print(f"  t={t} res{res_idx+1}: max_prob={max_prob:.4f}  "
+                      f"entropy={entropy:.3f}  uniform_baseline={uniform:.4f}  "
+                      f"N_IDR={attn.shape[-1]}")
+
             frames.append({
                 "image":    denormalize_imagenet(frame[0]),
                 "depth":    pred[0, 0].cpu().float().numpy(),
@@ -108,14 +117,35 @@ def _run_clip(model, images, depths, masks, capture, device,
 # Visualization helpers
 # ---------------------------------------------------------------------------
 
-def _isd_assignments(fd, num_heads):
-    """Return {res_idx: (H_feat, W_feat) int array} for all ISD resolutions."""
+def _isd_assignments(fd, num_heads, soft=False):
+    """Return {res_idx: (H_feat, W_feat) array} for all ISD resolutions.
+
+    soft=False  hard argmax  → integer array, discrete colormap
+    soft=True   weighted-average IDR index → float array, continuous colormap.
+                Stable across frames: a pixel split between IDR 3 and IDR 7
+                shows ~5.0 rather than flipping between 3 and 7 each frame.
+    """
     out = {}
     for res_idx, attn_bh in fd["isd_attn"].items():
         h, w = fd["isd_hw"][res_idx]
         attn = _extract_sample(attn_bh, num_heads, sample_idx=0)  # (N_pixels, N_IDR)
-        out[res_idx] = attn.argmax(dim=-1).reshape(h, w).numpy()
+        if soft:
+            idr_idx = torch.arange(attn.shape[-1], dtype=torch.float32)
+            out[res_idx] = (attn * idr_idx).sum(-1).reshape(h, w).numpy()
+        else:
+            out[res_idx] = attn.argmax(dim=-1).reshape(h, w).numpy()
     return out
+
+
+def _idr_display(num_idrs, soft):
+    """Return (cmap, norm_or_None, vmin, vmax) for ISD assignment panels."""
+    if soft:
+        return plt.get_cmap("viridis"), None, 0.0, float(num_idrs - 1)
+    base   = plt.get_cmap("tab20").colors
+    colors = [base[i % 20] for i in range(num_idrs)]
+    cmap   = ListedColormap(colors)
+    norm   = BoundaryNorm(np.arange(num_idrs + 1) - 0.5, num_idrs)
+    return cmap, norm, 0, num_idrs - 1
 
 
 def _make_fig(frames_data, num_heads, depth_max, num_idrs):
@@ -134,7 +164,7 @@ def _make_fig(frames_data, num_heads, depth_max, num_idrs):
 
 def _make_axes():
     """3 columns × 2 rows. Returns fig and flat axes list (row-major)."""
-    fig, axes = plt.subplots(2, 3, figsize=(21, 10), constrained_layout=True)
+    fig, axes = plt.subplots(2, 3, figsize=(21, 7), constrained_layout=True)
     for ax in axes.flat:
         ax.axis("off")
     return fig, axes
@@ -146,66 +176,64 @@ def _depth_cmap():
     return cmap
 
 
-def _idr_cmap_norm(num_idrs):
-    """Discrete colormap with one fixed colour per IDR index — consistent across frames.
-
-    Cycles through the 20 tab20 colours explicitly so indices above 20 never
-    get interpolated intermediate colours (which is what get_cmap("tab20", N>20) does).
-    """
-    base = plt.get_cmap("tab20").colors          # exactly 20 RGBA tuples, no interpolation
-    colors = [base[i % 20] for i in range(num_idrs)]
-    cmap = ListedColormap(colors)
-    norm = BoundaryNorm(np.arange(num_idrs + 1) - 0.5, num_idrs)
-    return cmap, norm
-
-
-def _fill_axes(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr,
-               isd_label="IDR assignment"):
-    """
-    Layout:
-      row 0: [RGB | depth pred | GT depth]   — shared plasma scale; zeros masked grey
-      row 1: [ISD res 0 | ISD res 1 | ISD res 2]  — discrete fixed colormap
-    """
-    asgns = _isd_assignments(fd, num_heads)
+def _init_images(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, isd_label, soft):
+    """Create every AxesImage object once with fixed norm/cmap. Returns handles dict."""
+    asgns = _isd_assignments(fd, num_heads, soft=soft)
+    cmap_idr, norm_idr, vmin_idr, vmax_idr = _idr_display(num_idrs, soft)
+    interp = "bilinear" if soft else "nearest"
 
     # row 0
-    axes[0, 0].imshow(fd["image"])
     axes[0, 0].set_title("RGB", fontsize=12)
+    im_rgb = axes[0, 0].imshow(fd["image"])
 
-    im_d = axes[0, 1].imshow(fd["depth"], cmap=cmap_depth, vmin=0, vmax=depth_max)
     axes[0, 1].set_title("Depth prediction", fontsize=12)
+    im_d = axes[0, 1].imshow(fd["depth"], cmap=cmap_depth, vmin=0, vmax=depth_max)
 
-    gt_masked = np.ma.masked_equal(fd["gt"], 0)
-    im_gt = axes[0, 2].imshow(gt_masked, cmap=cmap_depth, vmin=0, vmax=depth_max)
     axes[0, 2].set_title("GT depth  (grey = no annotation)", fontsize=12)
+    im_gt = axes[0, 2].imshow(
+        np.ma.masked_equal(fd["gt"], 0), cmap=cmap_depth, vmin=0, vmax=depth_max
+    )
 
-    # row 1 — use imshow + fixed discrete norm so colours never flicker
+    # row 1
     im_asgns = []
     for col in range(3):
         if col in asgns:
-            im = axes[1, col].imshow(
-                asgns[col], cmap=cmap_idr, norm=norm_idr, interpolation="nearest"
-            )
             axes[1, col].set_title(f"{isd_label} — res {col + 1}", fontsize=12)
             axes[1, col].axis("off")
-            im_asgns.append(im)
+            im_asgns.append(axes[1, col].imshow(
+                asgns[col], cmap=cmap_idr, norm=norm_idr,
+                vmin=vmin_idr, vmax=vmax_idr, interpolation=interp,
+            ))
 
-    return im_d, im_gt, im_asgns
+    return {"rgb": im_rgb, "depth": im_d, "gt": im_gt, "asgns": im_asgns}
 
 
-def _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, isd_label, path):
-    cmap_depth = _depth_cmap()
-    cmap_idr, norm_idr = _idr_cmap_norm(num_idrs)
-    fig, axes = _make_axes()
-    im_d, im_gt, im_asgns = _fill_axes(
-        axes, fd, num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr, isd_label
-    )
-    fig.colorbar(im_d, ax=axes[0, 2], location="right", shrink=0.9, label="depth (m)")
-    if im_asgns:
-        cb = fig.colorbar(im_asgns[-1], ax=axes[1, 2], location="right", shrink=0.9)
-        cb.set_label("IDR index")
+def _update_images(handles, fd, num_heads, soft):
+    """Update all panels in-place via set_data — no new AxesImage objects created."""
+    asgns = _isd_assignments(fd, num_heads, soft=soft)
+    handles["rgb"].set_data(fd["image"])
+    handles["depth"].set_data(fd["depth"])
+    handles["gt"].set_data(np.ma.masked_equal(fd["gt"], 0))
+    for col, im in enumerate(handles["asgns"]):
+        im.set_data(asgns[col])
+
+
+def _add_idr_colorbar(fig, axes, im_asgns, num_idrs, soft):
+    if not im_asgns:
+        return
+    cb = fig.colorbar(im_asgns[-1], ax=axes[1, 2], location="right", shrink=0.9)
+    cb.set_label("mean IDR index" if soft else "IDR index")
+    if not soft:
         step = max(1, num_idrs // 10)
         cb.set_ticks(range(0, num_idrs, step))
+
+
+def _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, isd_label, soft, path):
+    cmap_depth = _depth_cmap()
+    fig, axes = _make_axes()
+    handles = _init_images(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, isd_label, soft)
+    fig.colorbar(handles["depth"], ax=axes[0, 2], location="right", shrink=0.9, label="depth (m)")
+    _add_idr_colorbar(fig, axes, handles["asgns"], num_idrs, soft)
     clip_info = f"clip {fd.get('clip_idx', '')}  {fd.get('seq_id', '')}"
     fig.suptitle(f"{clip_info}\n{model_tag}", fontsize=11)
     fig.savefig(path, dpi=100)
@@ -227,38 +255,25 @@ def _make_writer(fmt: str, fps: int):
     return PillowWriter(fps=fps)
 
 
-def _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, isd_label, path, fps, fmt="gif"):
+def _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, isd_label, soft, path, fps, fmt="gif"):
     cmap_depth = _depth_cmap()
-    cmap_idr, norm_idr = _idr_cmap_norm(num_idrs)
-    fig, axes = _make_axes()
-    im_d, im_gt, im_asgns = _fill_axes(
-        axes, frames_data[0], num_heads, depth_max, num_idrs, cmap_depth, cmap_idr, norm_idr, isd_label
-    )
-    fig.colorbar(im_d, ax=axes[0, 2], location="right", shrink=0.9, label="depth (m)")
-    if im_asgns:
-        cb = fig.colorbar(im_asgns[-1], ax=axes[1, 2], location="right", shrink=0.9)
-        cb.set_label("IDR index")
-        step = max(1, num_idrs // 10)
-        cb.set_ticks(range(0, num_idrs, step))
-    fd0    = frames_data[0]
+    fig, axes  = _make_axes()
+    fd0        = frames_data[0]
+    handles    = _init_images(axes, fd0, num_heads, depth_max, num_idrs, cmap_depth, isd_label, soft)
+    fig.colorbar(handles["depth"], ax=axes[0, 2], location="right", shrink=0.9, label="depth (m)")
+    _add_idr_colorbar(fig, axes, handles["asgns"], num_idrs, soft)
     sup = fig.suptitle(
         f"clip {fd0.get('clip_idx', '')}  {fd0.get('seq_id', '')}  — frame 1\n{model_tag}",
         fontsize=11,
     )
 
     def update(t):
-        fd    = frames_data[t]
-        asgns = _isd_assignments(fd, num_heads)
-        axes[0, 0].images[0].set_data(fd["image"])
-        im_d.set_data(fd["depth"])
-        im_gt.set_data(np.ma.masked_equal(fd["gt"], 0))
-        for col, im in enumerate(im_asgns):
-            im.set_data(asgns[col])
         fd = frames_data[t]
+        _update_images(handles, fd, num_heads, soft)
         sup.set_text(
             f"clip {fd.get('clip_idx', '')}  {fd.get('seq_id', '')}  — frame {t + 1}/{len(frames_data)}\n{model_tag}"
         )
-        return [im_d, im_gt, *im_asgns, sup]
+        return []
 
     anim = animation.FuncAnimation(
         fig, update, frames=len(frames_data), interval=1000 // fps, blit=False
@@ -284,6 +299,7 @@ def run_sequence_visualization(cfg: dict) -> None:
     fps         = cfg.get("fps", 2)
     fmt         = cfg.get("format", "gif")
     sam_mode    = cfg.get("sam_mode", "none")
+    soft        = cfg.get("soft_assignment", False)
 
     model = IDisc.build(config)
     model.load_pretrained(cfg["model_file"])
@@ -326,7 +342,7 @@ def run_sequence_visualization(cfg: dict) -> None:
         T          = images.shape[0]
 
         print(f"\nClip {clip_idx}  seq={seq_id}  frames={clip['frame_indices']}")
-        frames_data = _run_clip(model, images, depths, masks, capture, device, clip_idx, seq_id, sam_mode)
+        frames_data = _run_clip(model, images, depths, masks, capture, device, clip_idx, seq_id, sam_mode, num_heads)
         print(f"  {T} frames collected")
 
         # Compute global ranges once so colormaps are consistent across frames
@@ -341,11 +357,12 @@ def run_sequence_visualization(cfg: dict) -> None:
 
         for t, fd in enumerate(frames_data):
             png_path = clip_dir / f"frame_{t:03d}.png"
-            _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, isd_label, png_path)
+            _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, isd_label, soft, png_path)
             print(f"  saved {png_path.name}")
 
-        anim_path = output_dir / f"clip_{clip_idx:03d}_{seq_id}_{sam_mode}.{fmt}"
-        _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, isd_label, anim_path, fps, fmt)
+        suffix = f"{sam_mode}_{'soft' if soft else 'hard'}"
+        anim_path = output_dir / f"clip_{clip_idx:03d}_{seq_id}_{suffix}.{fmt}"
+        _save_gif(frames_data, num_heads, depth_max, num_idrs, model_tag, isd_label, soft, anim_path, fps, fmt)
         print(f"  saved {anim_path.name}")
 
     capture.remove()
@@ -368,6 +385,11 @@ def _parse_args() -> argparse.Namespace:
                         help="Override clip_length in the config JSON and save it back")
     parser.add_argument("--sam-mode", default="none",
                         choices=["none", "replace", "concat", "translate"])
+    parser.add_argument("--soft-assignment", action="store_true",
+                        help="Show weighted-average IDR index (continuous viridis) "
+                             "instead of hard argmax (discrete tab20). "
+                             "Stable across frames: split attention appears as a blend "
+                             "rather than flickering between two IDR indices.")
     parser.add_argument("--fps",    type=int, default=2)
     parser.add_argument("--format", default="gif", choices=["gif", "mp4"],
                         help="Output format — gif has centisecond delay resolution "
@@ -384,7 +406,8 @@ def main() -> None:
         "output_dir":   args.output_dir,
         "num_clips":    args.num_clips,
         "start_clip":    args.start_clip,
-        "sam_mode":      args.sam_mode,
+        "sam_mode":        args.sam_mode,
+        "soft_assignment": args.soft_assignment,
         "manifest_path": args.manifest_path,
         "clip_length":  args.clip_length,
         "fps":          args.fps,

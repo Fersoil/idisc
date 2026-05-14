@@ -258,10 +258,15 @@ def run_visualization(cfg: dict) -> None:
     num_heads = config["model"]["num_heads"]
     num_samples = cfg.get("num_samples", 8)
 
+    sam_mode = cfg.get("sam_mode", "none")
+
     model = IDisc.build(config)
     model.load_pretrained(cfg["model_file"])
     model = model.to(device).eval()
     print(f"Model loaded — {num_heads} heads, {model.afp.num_resolutions} AFP resolutions")
+    print(f"sam_mode: {sam_mode}")
+
+    yields_iq = getattr(model.pixel_encoder, "yields_instance_queries", False)
 
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
     dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
@@ -289,7 +294,23 @@ def run_visualization(cfg: dict) -> None:
             mask = batch["mask"].to(device)
             capture.reset()
 
-            model(data, gt=gt, mask=mask)
+            # For SAM3 encoders, run the backbone once and pass pre-extracted
+            # outputs to avoid a second backbone call inside model().
+            if yields_iq:
+                enc_out = model.pixel_encoder(data)
+                *fpn, instance_queries = enc_out
+                pre_extracted = model.invert_encoder_output_order(tuple(fpn))
+            else:
+                instance_queries = None
+                pre_extracted = None
+
+            model(
+                data,
+                instance_queries=instance_queries,
+                sam_mode=sam_mode,
+                pre_extracted_encoder_outputs=pre_extracted,
+                gt=gt, mask=mask,
+            )
 
             visualize_sample(
                 image=data,
@@ -311,6 +332,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--base-path", required=True)
     parser.add_argument("--output-dir", default="viz_results")
     parser.add_argument("--num-samples", type=int, default=8)
+    parser.add_argument("--sam-mode", default="none",
+                        choices=["none", "replace", "concat", "translate"])
     return parser.parse_args()
 
 
@@ -322,6 +345,7 @@ def main() -> None:
         "base_path": args.base_path,
         "output_dir": args.output_dir,
         "num_samples": args.num_samples,
+        "sam_mode":    args.sam_mode,
     })
 
 

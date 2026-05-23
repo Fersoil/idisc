@@ -87,15 +87,22 @@ def get_sam_queries_proj(processor, raw_img, prompt_mode):
 
         elif prompt_mode == "singleclass":
             all_queries = []
+            all_scores = []
             for cls in KITTI_CLASSES:
                 processor.reset_all_prompts(state)
                 processor.set_text_prompt(prompt=cls, state=state)
                 iq = state.get("instance_queries")
+                tk = state.get("topk_scores")
                 if iq is not None and iq.shape[0] > 0:
                     all_queries.append(iq)
+                    all_scores.append(tk)
             if not all_queries:
                 return None
-            return torch.cat(all_queries, dim=0).float().clone()
+            all_queries = torch.cat(all_queries, dim=0)
+            all_scores = torch.cat(all_scores, dim=0)
+            top_k = min(processor.top_k_queries, all_queries.shape[0])
+            _, best_idx = all_scores.topk(top_k)
+            return all_queries[best_idx].float().clone()
 
         else:  # empty
             processor.set_text_prompt(prompt="", state=state)
@@ -170,8 +177,17 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
 
     # Load data
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
-    valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
-        test_mode=True, base_path=data_path, crop=config["data"]["crop"])
+    if config["data"]["val_dataset"] == "KITTISequenceDataset":
+        valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
+            test_mode=True,
+            base_path=data_path,
+            manifest_path=config["data"]["manifest_path"],
+            clip_length=config["data"].get("clip_length", 4),
+            crop=config["data"]["crop"],
+        )
+    else:
+        valid_dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
+            test_mode=True, base_path=data_path, crop=config["data"]["crop"])
     valid_loader = DataLoader(valid_dataset, batch_size=1, num_workers=2,
                               sampler=SequentialSampler(valid_dataset),
                               pin_memory=True, drop_last=False)
@@ -199,9 +215,29 @@ def run_eval(cfg: dict[str, Any]) -> dict[str, float]:
 
     with torch.no_grad():
         for i, batch in enumerate(valid_loader):
-            data = batch["image"].to(device)
-            gt = batch["gt"].to(device)
-            mask = batch["mask"].to(device)
+            if "image" in batch:
+                data = batch["image"].to(device)
+                gt = batch["gt"].to(device)
+                mask = batch["mask"].to(device)
+            else:
+                images = batch["images"].to(device)
+                depths = batch["depths"].to(device)
+                masks = batch["masks"].to(device)
+                B, T = images.shape[:2]
+                frames = []
+                for b in range(B):
+                    for t in range(T):
+                        gt_t   = depths[b, t:t+1]
+                        mask_t = masks[b, t:t+1]
+                        if mask_t.bool().sum() == 0:
+                            continue
+                        data_t = images[b, t:t+1]
+                        frames.append((data_t, gt_t, mask_t))
+                if not frames:
+                    continue
+                data = torch.cat([d for (d, _, _) in frames], dim=0)
+                gt   = torch.cat([g for (_, g, _) in frames], dim=0)
+                mask = torch.cat([m for (_, _, m) in frames], dim=0)
 
             # Determine what to pass to model
             instance_queries = None

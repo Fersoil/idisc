@@ -1,0 +1,24 @@
+# @package _global_
+
+run:
+  exp_id: E1-baseline-finetune
+  task: finetune
+
+dataset:
+  legacy_config_path: configs/kitti/kitti_r101_sequence_baseline.json
+
+
+use_sequence_dataset: true
+
+method:
+  idr_source: afp
+  sam_mode: none
+  prompt:
+    mode: none
+    classes: []
+    use_bbox: false
+    strategy: no_sam
+
+tags:
+  - baseline
+  - sequence

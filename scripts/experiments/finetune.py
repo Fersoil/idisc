@@ -77,8 +77,10 @@ def _flatten_sequence_batch(batch, device):
     images = batch["images"].to(device)
     B, T = images.shape[:2]
     data = images.view(B * T, *images.shape[2:])
-    gt = batch["gt"].to(device).view(B * T, *batch["gt"].shape[2:])
-    mask = batch["mask"].to(device).view(B * T, *batch["mask"].shape[2:])
+    gt_key = "gt" if "gt" in batch else "depths"
+    mask_key = "mask" if "mask" in batch else "masks"
+    gt = batch[gt_key].to(device).view(B * T, *batch[gt_key].shape[2:])
+    mask = batch[mask_key].to(device).view(B * T, *batch[mask_key].shape[2:])
     q = batch.get("sam3_queries")
     sam3_q = (
         q.to(device).view(B * T, q.shape[2], q.shape[3])
@@ -106,6 +108,9 @@ def validate_model(model, valid_loader, context, device, sam_mode="concat",
 
     for i, batch in enumerate(valid_loader):
         data, gt, mask, sam3_q, _ = _unpack_batch(batch, device)
+
+        if mask.bool().sum() == 0:
+            continue
 
         batch_preds = []
         for idx in range(data.shape[0]):
@@ -175,7 +180,15 @@ def validate_model_sequential(model, valid_loader, context, device, sam_mode="co
                 )
                 inv_frame_fpn = tuple(reversed(frame_fpn))
 
+                h,w = frame_fpn[-1].shape[-2:] 
+                c5 = torch.zeros(1,2048,h,w, device=device, dtype=frame_fpn[0].dtype)
+                inv_frame_fpn = (c5,) + tuple(reversed(frame_fpn))
+
                 iq = queries_T[t]   # (K, 256)
+
+
+                if sam_mode == "none" or iq.shape[0] == 0:
+                    iq = None
 
                 with context:
                     pred, _, _ = model(
@@ -253,7 +266,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
     val_interval = int(finetune_cfg.get("val_interval", cfg.get("val_interval", 500)))
     batch_size = int(finetune_cfg.get("batch_size", cfg.get("batch_size", 2)))
 
-    use_online_sam = sam_checkpoint is not None and not encoder_owns_sam3
+    use_online_sam = sam_checkpoint is not None and not encoder_owns_sam3 and sam_mode != "none"
 
     _finetune_wandb_cfg = {
         "sam_mode": sam_mode,
@@ -324,9 +337,12 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
             for param in model.parameters():
                 param.requires_grad = False
             for param in model.sam3_proj.parameters():
-                param.requires_grad = True
+                param.requires_grad = False
             for param in model.isd.parameters():
                 param.requires_grad = True
+            for param in model.afp.parameters():
+                param.requires_grad = True
+        
         else:
             for param in model.parameters():
                 param.requires_grad = False
@@ -528,7 +544,7 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 print(f"\n  Validation at step {step}...", flush=True)
                 model.eval()
                 with torch.no_grad():
-                    if cfg.get("use_sequence_dataset"):
+                    if cfg.get("use_sequence_dataset") or config["data"]["val_dataset"] == "KITTISequenceDataset":
                         metrics = validate_model_sequential(model, valid_loader, context, device, sam_mode=sam_mode)
                     else:
                         metrics = validate_model(model, valid_loader, context, device,
@@ -546,10 +562,16 @@ def run_finetune(cfg: dict[str, Any]) -> dict[str, Any]:
                 else:
                     for param in model.parameters():
                         param.requires_grad = False
-                    for param in model.sam3_proj.parameters():
-                        param.requires_grad = True
-                    for param in model.isd.parameters():
-                        param.requires_grad = True
+                    if sam_mode == "none":
+                        for param in model.isd.parameters():
+                            param.requires_grad = True
+                        for param in model.afp.parameters():
+                            param.requires_grad = True
+                    else:
+                        for param in model.sam3_proj.parameters():
+                            param.requires_grad = True
+                        for param in model.isd.parameters():
+                            param.requires_grad = True
 
                 abs_rel = metrics.get("abs_rel", np.inf)
                 print(f"  abs_rel={abs_rel:.6f}  (best={best_abs_rel:.6f})", flush=True)

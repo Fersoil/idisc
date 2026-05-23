@@ -1,23 +1,24 @@
 # @package _global_
 
 run:
-  exp_id: finetune-sequence
+  exp_id: E1-baseline-finetune
   task: finetune
 
-finetune:
-  n_iters: 5000
-  lr: 5.0e-5
-  batch_size: 2
-  val_interval: 500
-  use_sequence_dataset: true
-  output_dir: finetune_output/${run.exp_id}
+dataset:
+  legacy_config_path: configs/kitti/kitti_r101_sequence_baseline.json
+
+
+use_sequence_dataset: true
 
 method:
   idr_source: afp
-  sam_mode: concat
-  query_source: cached
+  sam_mode: none
+  prompt:
+    mode: none
+    classes: []
+    use_bbox: false
+    strategy: no_sam
 
 tags:
-  - finetune
-  - concat
+  - baseline
   - sequence

@@ -75,6 +75,12 @@ case "$EXPERIMENT" in
         TIME="2:00:00"
         CONSTRAINT=""
         ;;
+     baseline_idisc_finetune)
+        JOB_NAME="iDisc-baseline-finetune"
+        HYDRA_EXP="baseline_idisc_finetune"
+        TIME="5:00:00" 
+        CONSTRAINT=""
+        ;;
     *)
         echo "Unknown experiment: $EXPERIMENT" >&2
         echo "Valid: baseline e11 e12 e13 e14" >&2

@@ -2,7 +2,7 @@
 
 run:
   exp_id: E1-baseline-sequence
-  task: finetune
+  task: eval
 
 dataset:
   legacy_config_path: configs/kitti/kitti_r101_sequence_baseline.json

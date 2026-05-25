@@ -12,6 +12,7 @@
 #   e13         – E13 SAM3 pure replace, 4-frame sequence
 #   e14         – E14 SAM3 video encoder, 4-frame sequence  (needs 16 GB GPU)
 #   e15         – E15 SAM3 video encoder + translate, 4-frame sequence  (needs 16 GB GPU)
+#   e21         – E21 SAM3 video encoder, FPN-capture fix re-run of E14  (needs 16 GB GPU)
 #
 # Examples:
 #   ./scripts/launch.sh e11
@@ -29,7 +30,7 @@ shift
 
 if [[ -z "$EXPERIMENT" ]]; then
     echo "Usage: $0 <experiment> [--name <label>] [-- <hydra_overrides...>]" >&2
-    echo "Experiments: baseline e11 e12 e13 e14 e15" >&2
+    echo "Experiments: baseline e11 e12 e13 e14 e15 e21" >&2
     exit 1
 fi
 
@@ -76,9 +77,15 @@ case "$EXPERIMENT" in
         TIME="14:00:00"
         CONSTRAINT="--constraint=5060ti"
         ;;
+    e21)
+        JOB_NAME="iDisc-e21-video-fixed"
+        HYDRA_EXP="sam3_video_fixed"
+        TIME="14:00:00"
+        CONSTRAINT="--constraint=5060ti"
+        ;;
     *)
         echo "Unknown experiment: $EXPERIMENT" >&2
-        echo "Valid: baseline e11 e12 e13 e14 e15" >&2
+        echo "Valid: baseline e11 e12 e13 e14 e15 e21" >&2
         exit 1
         ;;
 esac

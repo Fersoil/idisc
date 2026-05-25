@@ -114,27 +114,45 @@ class Sam3VideoPixelEncoder(nn.Module):
         #    "ids": (M,) long, "scores": (M,) float}
         self._masklets_per_frame: List[Optional[dict]] = []
 
-        # Raw backbone FPN buffer: captured via monkey-patch on
-        # detector.backbone.forward_image so we get 256-channel features
-        # BEFORE tracker conv_s0/conv_s1 projections reduce the channels.
-        self._raw_backbone_out_buf: Optional[dict] = None
-        self._patch_backbone_forward_image()
+        # FPN strategy: we call backbone.forward_image(img_batch) ONCE per
+        # clip (at the start of forward), cache the dict, and reuse it for
+        # both (a) building our per-frame FPN tensors and (b) feeding back
+        # into SAM3's internal pipeline so it doesn't re-run the backbone.
+        # The reuse is done by patching Sam3Image._get_img_feats to inject
+        # our cached dict into the per-frame `backbone_out` dict that SAM3
+        # constructs in run_backbone_and_detection. With "backbone_fpn"
+        # already present, _get_img_feats takes its fast path and skips
+        # its own self.backbone.forward_image fallback.
+        #
+        # Why this convoluted path instead of just monkey-patching
+        # backbone.forward_image globally:
+        #   - SAM3's video pipeline routes through forward_grounding which
+        #     uses self.backbone.forward_image as a *fallback* inside
+        #     _get_img_feats. That fallback is called via Python attribute
+        #     lookup, but if SAM3 internally bypasses it (e.g. via direct
+        #     vision_backbone.forward(samples) in vl_combiner.py:88), the
+        #     patch silently misses — and we have no observable signal
+        #     until BN stats show zeros at the end of training.
+        #   - Caching via _get_img_feats is the consumer-side intercept:
+        #     if SAM3 wants FPN features, it has to go through this method,
+        #     so injecting the cached dict guarantees the skip works.
+        self._cached_bb_out: Optional[dict] = None
+        self._install_get_img_feats_cache()
 
-    def _patch_backbone_forward_image(self):
-        """Monkey-patch backbone.forward_image so we can capture its raw
-        output dict (which includes 256-channel `backbone_fpn`) BEFORE the
-        video base applies tracker-specific conv_s0/conv_s1 projections."""
-        backbone = self.video_model.detector.backbone
-        original = backbone.forward_image
+    def _install_get_img_feats_cache(self):
+        """Patch Sam3Image._get_img_feats on the detector instance so it
+        injects our cached backbone_out (set in forward() before propagate)
+        instead of re-running the backbone."""
+        detector = self.video_model.detector
+        original = detector._get_img_feats
+        enc = self
 
-        enc = self   # capture self before deepcopy
+        def _patched(backbone_out, img_ids):
+            if "backbone_fpn" not in backbone_out and enc._cached_bb_out is not None:
+                backbone_out.update(enc._cached_bb_out)
+            return original(backbone_out, img_ids)
 
-        def _patched(image, **kw):
-            out = original(image, **kw)
-            enc._raw_backbone_out_buf = out
-            return out
-
-        backbone.forward_image = _patched
+        detector._get_img_feats = _patched
 
     def _infer_num_levels(self) -> int:
         try:
@@ -226,7 +244,48 @@ class Sam3VideoPixelEncoder(nn.Module):
             dtype=torch.bfloat16,
             enabled=clip.device.type == "cuda",
         ):
+            # init_state preprocesses the PIL images using SAM3's expected
+            # normalization (mean=std=(0.5,0.5,0.5)) and resize to image_size
+            # (typically 1024). We need to call this BEFORE running the
+            # backbone so the input distribution matches what SAM3 was
+            # trained on.
             state = self.video_model.init_state(resource_path=pil_images)
+
+            # --- Run backbone ONCE on the preprocessed batch ---
+            # We use this output both for our FPN extraction below AND as
+            # the cache that the patched _get_img_feats injects into SAM3's
+            # internal pipeline (so it skips its own backbone fallback).
+            img_batch = state["input_batch"].img_batch
+            if not isinstance(img_batch, torch.Tensor):
+                img_batch = torch.stack([t for t in img_batch], dim=0)
+            bb_out = self.video_model.detector.backbone.forward_image(img_batch)
+            self._cached_bb_out = bb_out
+            fpn_raw = bb_out.get("backbone_fpn")
+            if fpn_raw is None or len(fpn_raw) < n_levels:
+                raise RuntimeError(
+                    "backbone.forward_image did not return backbone_fpn with "
+                    f">= {n_levels} levels (got {len(fpn_raw) if fpn_raw else 0})"
+                )
+            # Use the highest-resolution n_levels (matches the slicing the
+            # rest of iDisc expects via _target_level_sizes).
+            for lvl_i, feat_any in enumerate(list(fpn_raw)[:n_levels]):
+                # Unwrap NestedTensor → plain tensor if needed.
+                feat = getattr(feat_any, "tensors", feat_any).float()
+                if feat.dim() == 3:
+                    feat = feat.unsqueeze(0)
+                tgt = target_sizes[lvl_i]
+                if feat.shape[-2:] != tgt:
+                    feat = F.interpolate(
+                        feat, size=tgt, mode="bilinear", align_corners=False
+                    )
+                # feat is (T, C, h, w). Distribute one per frame so the
+                # per-frame stacking below cleanly yields (T, C, h, w).
+                for t in range(T):
+                    if per_frame_fpn[t] is None:
+                        per_frame_fpn[t] = []
+                    per_frame_fpn[t].append(feat[t : t + 1])
+
+            # --- Tracker + decoder hooks for queries / masklets ---
             # Single prompt with all classes combined on frame 0;
             # tracker propagates to frames 1..T-1.
             # All 200 decoder slots are used (no top-K filtering).
@@ -234,30 +293,9 @@ class Sam3VideoPixelEncoder(nn.Module):
             self.video_model.add_prompt(state, frame_idx=0, text_str=prompt_str)
 
             for frame_idx, outputs in self.video_model.propagate_in_video(state):
-                # 1. Capture FPN from the backbone's raw output (captured via
-                #    monkey-patched forward_image before tracker conv projections
-                #    reduce channels from 256 to whatever the tracker needs).
-                fpn_raw = None
-                if self._raw_backbone_out_buf is not None:
-                    fpn_raw = self._raw_backbone_out_buf.get("backbone_fpn")
-                    self._raw_backbone_out_buf = None
-
-                if fpn_raw is not None and len(fpn_raw) >= n_levels:
-                    fpn = [t.float() for t in list(fpn_raw)[:n_levels]]
-                    resized = []
-                    for lvl_i, feat in enumerate(fpn):
-                        if feat.dim() == 3:
-                            feat = feat.unsqueeze(0)
-                        tgt = target_sizes[lvl_i]
-                        if feat.shape[-2:] != tgt:
-                            feat = F.interpolate(
-                                feat, size=tgt, mode="bilinear", align_corners=False
-                            )
-                        resized.append(feat)
-                    per_frame_fpn[frame_idx] = resized
-
-                # 2. Capture all queries from hook (fired during detector
-                #    forward inside propagate_in_video).
+                # FPN already captured above by the explicit backbone call.
+                # Capture queries from the decoder hook (fired during detector
+                # forward inside propagate_in_video).
                 if self._last_hook_hs is not None:
                     hs = self._last_hook_hs.float()
                     self._num_queries = hs.shape[0]
@@ -292,8 +330,10 @@ class Sam3VideoPixelEncoder(nn.Module):
                         }
 
         # Explicitly free the SAM3 inference state (holds all frame features on GPU)
-        # and return that memory to the pool before the caller runs the depth head.
+        # and the cached backbone output, then return that memory to the pool
+        # before the caller runs the depth head.
         del state
+        self._cached_bb_out = None
         torch.cuda.empty_cache()
 
         # Stack into (T, ...) tensors.

@@ -7,6 +7,8 @@
 #
 # Experiments:
 #   baseline    – E1  iDisc-R101 pretrained baseline (eval)
+#   e01         - E1  validate baseline iDisc on sequential data
+#   e02         - E1  finetune baseline iDisc on sequential data
 #   e11         – E11 SAM3 pure replace, single-frame
 #   e12         – E12 SAM3 translate (Sam3QueryToIDR), single-frame
 #   e13         – E13 SAM3 pure replace, 4-frame sequence
@@ -45,6 +47,18 @@ case "$EXPERIMENT" in
         TIME="2:00:00"
         CONSTRAINT=""
         ;;
+    e01)
+        JOB_NAME="iDisc-baseline-seq"
+        HYDRA_EXP="baseline_sequence"
+        TIME="2:00:00"
+        CONSTRAINT=""
+        ;;
+    e02)
+        JOB_NAME="iDisc-baseline-finetune"
+        HYDRA_EXP="baseline_idisc_finetune"
+        TIME="5:00:00"
+        CONSTRAINT=""
+        ;;
     e11)
         JOB_NAME="iDisc-e11-pure"
         HYDRA_EXP="sam3_pure"
@@ -78,12 +92,12 @@ case "$EXPERIMENT" in
      baseline_idisc_finetune)
         JOB_NAME="iDisc-baseline-finetune"
         HYDRA_EXP="baseline_idisc_finetune"
-        TIME="5:00:00" 
+        TIME="5:00:00"
         CONSTRAINT=""
         ;;
     *)
         echo "Unknown experiment: $EXPERIMENT" >&2
-        echo "Valid: baseline e11 e12 e13 e14" >&2
+        echo "Valid: baseline e01 e02 e11 e12 e13 e14 baseline-sequence baseline_idisc_finetune" >&2
         exit 1
         ;;
 esac
@@ -107,8 +121,8 @@ else
 fi
 export CUDA_HOME=\$(dirname \"\$(dirname \"\$(which nvcc)\")\")
 export PYTHONPATH='${IDISC_REPO}:${IDISC_REPO}/sam3:\${PYTHONPATH:-}'
-cd '${IDISC_REPO}/idisc/models/ops'
-pip install .
+# cd '${IDISC_REPO}/idisc/models/ops'
+# pip install .
 cd '${IDISC_REPO}'
 ${INNER_CMD}"
 

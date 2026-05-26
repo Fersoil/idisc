@@ -1,7 +1,7 @@
 enabled: true
 backend: wandb
-project: idisc-finetune
-entity: null
+project: idisc-sam3
+entity: sam2depth
 mode: online
 tags: []
 log_code: false

@@ -35,6 +35,7 @@ class Sam3VideoPixelEncoder(nn.Module):
 
     yields_instance_queries: bool = True
     yields_clip: bool = True          # signals training loop to skip flatten
+    is_video_encoder: bool = True     # used by sequence visualizers to branch paths
     embed_dims: List[int]
 
     def __init__(
@@ -46,6 +47,7 @@ class Sam3VideoPixelEncoder(nn.Module):
         freeze_sam3: bool = True,
         load_from_HF: Optional[bool] = None,
         confidence_threshold: float = 0.0,
+        max_instances: int = -1,
         **kwargs,
     ):
         super().__init__()
@@ -69,7 +71,23 @@ class Sam3VideoPixelEncoder(nn.Module):
         from sam3.model_builder import build_sam3_video_model
         self.video_model = build_sam3_video_model(
             checkpoint_path=sam_checkpoint if not load_from_HF else None,
+            apply_temporal_disambiguation=False,
         ).eval()
+        # model_builder hardcodes several score thresholds — override with config values.
+        # new_det_thresh: minimum detection score to start tracking a new object (default 0.7)
+        # score_threshold_detection: NMS score threshold inside the detector (default 0.5)
+        # hotstart_delay: objects suppressed for this many frames after detection (default 15)
+        #   — with short clips this hides everything, so we disable it.
+        self.video_model.new_det_thresh = self.confidence_threshold
+        self.video_model.score_threshold_detection = self.confidence_threshold
+        self.video_model.hotstart_delay = 0
+        self.video_model.hotstart_unmatch_thresh = 0
+        self.video_model.hotstart_dup_thresh = 0
+        # Hard cap on simultaneously tracked instances (-1 = unlimited).
+        # SAM3's tracker memory scales linearly with this; with threshold=0.0
+        # up to 200 instances can be created per clip.
+        if max_instances > 0:
+            self.video_model.max_num_objects = max_instances
 
         if freeze_sam3:
             for p in self.video_model.parameters():
@@ -84,6 +102,17 @@ class Sam3VideoPixelEncoder(nn.Module):
         # Populated by the forward hook during propagate_in_video.
         self._decoder_hs_per_frame: Dict[int, torch.Tensor] = {}
         self._decoder_handle = None   # registered lazily (post-deepcopy)
+
+        # Set to True by visualization scripts that need per-frame masklet data.
+        # Off by default so training does not pay the CPU cost of converting SAM3
+        # numpy mask outputs to tensors for every clip.
+        self.track_masklets: bool = False
+
+        # Per-frame tracker masklets. Filled during forward() only when
+        # track_masklets=True; one dict per frame:
+        #   {"frame_idx": int, "masks": (M, Hm, Wm) float [0,1] or None,
+        #    "ids": (M,) long, "scores": (M,) float}
+        self._masklets_per_frame: List[Optional[dict]] = []
 
         # Raw backbone FPN buffer: captured via monkey-patch on
         # detector.backbone.forward_image so we get 256-channel features
@@ -190,6 +219,7 @@ class Sam3VideoPixelEncoder(nn.Module):
         self._decoder_hs_per_frame = {}
         self._last_hook_hs = None
         self._raw_backbone_out_buf = None
+        self._masklets_per_frame = [None] * T if self.track_masklets else []
 
         with torch.inference_mode(), torch.autocast(
             device_type=clip.device.type,
@@ -201,9 +231,7 @@ class Sam3VideoPixelEncoder(nn.Module):
             # tracker propagates to frames 1..T-1.
             # All 200 decoder slots are used (no top-K filtering).
             prompt_str = " . ".join(self.prompt_classes)
-            self.video_model.add_prompt(
-                state, frame_idx=0, text_str=prompt_str
-            )
+            self.video_model.add_prompt(state, frame_idx=0, text_str=prompt_str)
 
             for frame_idx, outputs in self.video_model.propagate_in_video(state):
                 # 1. Capture FPN from the backbone's raw output (captured via
@@ -235,6 +263,38 @@ class Sam3VideoPixelEncoder(nn.Module):
                     self._num_queries = hs.shape[0]
                     per_frame_queries[frame_idx] = hs
                     self._last_hook_hs = None
+
+                # 3. Capture tracker masklets (only when visualization mode is on).
+                if self.track_masklets:
+                    raw_masks = outputs.get("out_binary_masks")
+                    ids       = outputs.get("out_obj_ids")
+                    scores    = outputs.get("out_probs")
+
+                    if raw_masks is not None and raw_masks.shape[0] > 0:
+                        masks_f = torch.from_numpy(raw_masks).float()  # (M, H, W)
+                        if masks_f.dim() == 4:
+                            masks_f = masks_f[:, 0]
+                        if masks_f.min() < -0.1 or masks_f.max() > 1.1:
+                            masks_f = masks_f.sigmoid()
+                        ids_t = (torch.from_numpy(ids).long() if ids is not None
+                                 else torch.arange(masks_f.shape[0], dtype=torch.long))
+                        scores_t = (torch.from_numpy(scores).float() if scores is not None
+                                    else masks_f.flatten(1).amax(1))
+                        self._masklets_per_frame[frame_idx] = {
+                            "frame_idx": frame_idx,
+                            "masks":  masks_f,
+                            "ids":    ids_t,
+                            "scores": scores_t,
+                        }
+                    else:
+                        self._masklets_per_frame[frame_idx] = {
+                            "frame_idx": frame_idx, "masks": None, "ids": None, "scores": None,
+                        }
+
+        # Explicitly free the SAM3 inference state (holds all frame features on GPU)
+        # and return that memory to the pool before the caller runs the depth head.
+        del state
+        torch.cuda.empty_cache()
 
         # Stack into (T, ...) tensors.
         # Fallback: any frame whose FPN was not captured → zeros (shouldn't happen).

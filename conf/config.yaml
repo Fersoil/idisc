@@ -1,10 +1,10 @@
 defaults:
   - dataset: kitti
   - _self_
+  - finetune: default
   - experiment: baseline
   - paths: cluster
   - tracking: none
-  - finetune: default
 
 run:
   task: eval

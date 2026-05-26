@@ -11,6 +11,7 @@
 #   e12         – E12 SAM3 translate (Sam3QueryToIDR), single-frame
 #   e13         – E13 SAM3 pure replace, 4-frame sequence
 #   e14         – E14 SAM3 video encoder, 4-frame sequence  (needs 16 GB GPU)
+#   e15         – E15 SAM3 video encoder + translate, 4-frame sequence  (needs 16 GB GPU)
 #
 # Examples:
 #   ./scripts/launch.sh e11
@@ -19,13 +20,16 @@
 #
 set -euo pipefail
 
+# help with CUDA memory usage
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 IDISC_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 EXPERIMENT="${1:-}"
 shift
 
 if [[ -z "$EXPERIMENT" ]]; then
     echo "Usage: $0 <experiment> [--name <label>] [-- <hydra_overrides...>]" >&2
-    echo "Experiments: baseline e11 e12 e13 e14" >&2
+    echo "Experiments: baseline e11 e12 e13 e14 e15" >&2
     exit 1
 fi
 
@@ -66,9 +70,15 @@ case "$EXPERIMENT" in
         TIME="14:00:00"
         CONSTRAINT="--constraint=5060ti"
         ;;
+    e15)
+        JOB_NAME="iDisc-e15-video-translate"
+        HYDRA_EXP="sam3_video_translate"
+        TIME="14:00:00"
+        CONSTRAINT="--constraint=5060ti"
+        ;;
     *)
         echo "Unknown experiment: $EXPERIMENT" >&2
-        echo "Valid: baseline e11 e12 e13 e14" >&2
+        echo "Valid: baseline e11 e12 e13 e14 e15" >&2
         exit 1
         ;;
 esac

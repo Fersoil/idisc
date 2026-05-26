@@ -292,11 +292,18 @@ def run_clip(model, images, depths, masks, capture, num_heads,
     T   = images.shape[0]
     frames = []
 
-    with torch.no_grad():
+    use_amp = device.type == "cuda"
+
+    with torch.no_grad(), torch.autocast(
+        device_type=device.type, dtype=torch.bfloat16, enabled=use_amp,
+    ):
         enc.track_masklets = True
+        enc.video_model.masklet_confirmation_consecutive_det_thresh = 1
         enc_out    = enc(images)           # fills enc._masklets_per_frame
-        fpn_levels = enc_out[:-1]
-        queries_T  = enc_out[-1]
+        fpn_levels = tuple(lvl.cpu() for lvl in enc_out[:-1])
+        queries_T  = enc_out[-1].cpu()
+        del enc_out
+        torch.cuda.empty_cache()
 
         fixed_ids = None
         for t in range(T):
@@ -314,12 +321,12 @@ def run_clip(model, images, depths, masks, capture, num_heads,
             if fixed_ids is None:
                 fixed_ids = fdata["top_ids"]
 
-            frame_fpn     = tuple(lvl[t : t + 1] for lvl in fpn_levels)
+            frame_fpn     = tuple(lvl[t : t + 1].to(device) for lvl in fpn_levels)
             inv_frame_fpn = tuple(reversed(frame_fpn))
             capture.reset()
             pred, _, _ = model(
                 images[t : t + 1],
-                instance_queries=queries_T[t],
+                instance_queries=queries_T[t].to(device),
                 sam_mode=sam_mode,
                 pre_extracted_encoder_outputs=inv_frame_fpn,
                 gt=depths[t : t + 1], mask=masks[t : t + 1],

@@ -62,12 +62,17 @@ def _run_clip(model, images, depths, masks, capture, device,
     encoder_is_video = getattr(model.pixel_encoder, "is_video_encoder", False)
 
     frames = []
+    use_amp = images.device.type == "cuda"
 
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(
+        device_type=images.device.type, dtype=torch.bfloat16, enabled=use_amp,
+    ):
         if encoder_is_video:
             enc_out = model.pixel_encoder(images)
-            fpn_levels = enc_out[:-1]   # each (T, C, h, w)
-            queries_T  = enc_out[-1]    # (T, K, 256)
+            fpn_levels = tuple(lvl.cpu() for lvl in enc_out[:-1])
+            queries_T  = enc_out[-1].cpu()
+            del enc_out
+            torch.cuda.empty_cache()
 
         for t in range(T):
             capture.reset()
@@ -76,9 +81,9 @@ def _run_clip(model, images, depths, masks, capture, device,
             msk   = masks[t : t + 1]
 
             if encoder_is_video:
-                frame_fpn     = tuple(lvl[t : t + 1] for lvl in fpn_levels)
+                frame_fpn     = tuple(lvl[t : t + 1].to(images.device) for lvl in fpn_levels)
                 inv_frame_fpn = tuple(reversed(frame_fpn))
-                iq            = queries_T[t]
+                iq            = queries_T[t].to(images.device)
                 pred, _, _ = model(
                     frame,
                     instance_queries=iq,

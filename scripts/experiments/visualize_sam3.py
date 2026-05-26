@@ -62,7 +62,12 @@ class Sam3Capture:
         # Video encoder: T calls during pixel_encoder(clip) — pop per frame.
         self._queue: list = []
 
-        sam_model = encoder.sam_model
+        if hasattr(encoder, "sam_model"):
+            sam_model = encoder.sam_model
+        elif hasattr(encoder, "video_model"):
+            sam_model = encoder.video_model.detector
+        else:
+            raise AttributeError("Encoder has neither sam_model nor video_model")
         orig_fg   = sam_model.forward_grounding
         capture   = self
 
@@ -307,15 +312,18 @@ def _run_clip(model, capture, images, depths, masks, device, clip_idx, seq_id, s
     T = images.shape[0]
     encoder_is_video = getattr(model.pixel_encoder, "is_video_encoder", False)
     frames = []
+    use_amp = device.type == "cuda"
 
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(
+        device_type=device.type, dtype=torch.bfloat16, enabled=use_amp,
+    ):
         if encoder_is_video:
-            # forward_grounding is called T times inside pixel_encoder(images).
-            # Collect all T entries into the queue, then pop per frame below.
             capture.reset()
             enc_out    = model.pixel_encoder(images)
-            fpn_levels = enc_out[:-1]
-            queries_T  = enc_out[-1]
+            fpn_levels = tuple(lvl.cpu() for lvl in enc_out[:-1])
+            queries_T  = enc_out[-1].cpu()
+            del enc_out
+            torch.cuda.empty_cache()
             print(f"  encoder captured {len(capture._queue)} mask entries")
 
         fixed_slots = None   # locked from first valid frame; stable across all frames
@@ -325,12 +333,12 @@ def _run_clip(model, capture, images, depths, masks, device, clip_idx, seq_id, s
             msk   = masks[t : t + 1]
 
             if encoder_is_video:
-                frame_fpn     = tuple(lvl[t : t + 1] for lvl in fpn_levels)
+                frame_fpn     = tuple(lvl[t : t + 1].to(device) for lvl in fpn_levels)
                 inv_frame_fpn = tuple(reversed(frame_fpn))
                 entry = capture.pop()   # masks were captured during encoder forward
                 pred, _, _ = model(
                     frame,
-                    instance_queries=queries_T[t],
+                    instance_queries=queries_T[t].to(device),
                     sam_mode=sam_mode,
                     pre_extracted_encoder_outputs=inv_frame_fpn,
                     gt=gt, mask=msk,

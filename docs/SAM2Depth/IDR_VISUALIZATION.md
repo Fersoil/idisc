@@ -180,6 +180,7 @@ BP=/work/courses/3dv/team17/idisc
 E12=/work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam_finetuned.pt
 E20=/work/courses/3dv/team17/models/models_tkwiecinski/E20-sam3-pure-multiclass/best_sam_finetuned.pt
 R101=/work/courses/3dv/team17/models/kitti_resnet101.pt
+E21=/work/courses/3dv/team17/sam3-video-fixed/best_sam_finetuned.pt
 
 # --- viz_seq: image encoder IDR maps (baseline / replace / translate) ---
 python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_r101.json          --model-file $R101 --base-path $BP --sam-mode none      --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
@@ -189,6 +190,8 @@ python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kit
 # --- viz_seq_video: video encoder IDR maps (replace / translate) ---
 python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E20  --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
+# E21 run with replace mode - fixed sam3
+python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E21  --base-path $BP --sam-mode replace --output-dir outputs/runs/viz_seq_video_e21 --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
 # --- viz_sam3: image encoder SAM3 masks ---
 python scripts/experiments/visualize_sam3.py     --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_sam3      --start-clip 50 --num-clips 3 --clip-length 4 --fps 1

@@ -1,0 +1,24 @@
+# @package _global_
+# Finetune iDisc with the frozen SAM3 image encoder (sam_mode=replace by default;
+# override to translate via method.sam_mode=translate).
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_sam3_image
+  - override /finetune: image
+
+run:
+  exp_id: finetune-sam3-image
+  task: train
+  dataset_mode: image
+
+method:
+  idr_source: sam3
+  sam_mode: replace
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+
+tags:
+  - sam3
+  - finetune
+  - image

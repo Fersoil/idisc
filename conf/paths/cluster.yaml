@@ -3,5 +3,5 @@ pretrained_model: /work/courses/3dv/team17/models/kitti_resnet101.pt
 sam_checkpoint: /work/courses/3dv/team17/sam3_checkpoints/sam3.pt
 kitti_root: /work/courses/3dv/team17/idisc/datasets/kitti
 sequence_manifest: splits/kitti/sequence_manifest.json
-outputs_root: outputs/runs
+outputs_root: output/runs
 finetuning_dir: /work/courses/3dv/team17/idisc/finetuning

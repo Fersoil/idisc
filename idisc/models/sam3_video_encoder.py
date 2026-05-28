@@ -5,6 +5,7 @@ to frames 1..T-1 via the tracker. Returns `(*per_frame_fpn, per_frame_queries)`.
 """
 from __future__ import annotations
 
+import contextlib
 from typing import List, Optional, Sequence
 
 import torch
@@ -116,7 +117,10 @@ class Sam3VideoPixelEncoder(nn.Module):
         self._last_hs = None
         self._masklets_per_frame = [None] * T if self.track_masklets else []
 
-        with torch.inference_mode(), torch.autocast(
+        grad_ctx = (
+            torch.inference_mode() if self._freeze_sam3 else contextlib.nullcontext()
+        )
+        with grad_ctx, torch.autocast(
             device_type=clip.device.type,
             dtype=torch.bfloat16,
             enabled=clip.device.type == "cuda",

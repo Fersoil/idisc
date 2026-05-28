@@ -7,8 +7,6 @@ from .layers import (Conv2d, LayerNorm, _get_activation_cls,
                      c2_xavier_fill, get_norm)
 from .metrics import DICT_METRICS_DEPTH, DICT_METRICS_NORMALS, RunningMetric
 from .misc import format_seconds, is_main_process
-from .validation import validate
-from .validation_with_sam import validate_with_sam
 __all__ = [
     "AttentionLayer",
     "PositionEmbeddingSine",
@@ -25,9 +23,7 @@ __all__ = [
     "sync_tensor_across_gpus",
     "setup_multi_processes",
     "setup_slurm",
-    "validate",
     "RunningMetric",
     "DICT_METRICS_NORMALS",
     "DICT_METRICS_DEPTH",
-    "validate_with_sam"
 ]

@@ -45,7 +45,6 @@ def init_tracking(cfg: Any, run_dir: str | Path):
         ) from exc
 
     run_cfg = cfg_dict.get("run", {})
-    dataset_cfg = cfg_dict.get("dataset", {})
     method_cfg = cfg_dict.get("method", {})
 
     tags = []
@@ -69,8 +68,8 @@ def init_tracking(cfg: Any, run_dir: str | Path):
     wandb.define_metric("eval/*", step_metric="global_step")
 
     _ACTIVE_RUN.summary["run.exp_id"] = run_cfg.get("exp_id")
-    _ACTIVE_RUN.summary["dataset"] = dataset_cfg.get("dataset_name")
-    _ACTIVE_RUN.summary["method.variant"] = method_cfg.get("variant")
+    _ACTIVE_RUN.summary["dataset"] = cfg_dict.get("dataset_name")
+    _ACTIVE_RUN.summary["method.idr_source"] = method_cfg.get("idr_source")
 
     return _ACTIVE_RUN
 

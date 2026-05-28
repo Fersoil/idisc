@@ -1,107 +1,66 @@
 #!/bin/bash
-#
-# Unified SLURM experiment launcher.
+# SLURM launcher for the 5 live experiments. Invoke directly, not via sbatch;
+# this script wraps your overrides into an sbatch call with the right account,
+# time, and GPU constraint for the chosen experiment.
 #
 # Usage:
-#   ./scripts/launch.sh <experiment> [--name <label>] [-- <hydra_overrides...>]
+#   ./scripts/launch.sh experiment=<name> [hydra_overrides...] [--name TAG]
 #
-# Experiments:
-#   baseline    – E1  iDisc-R101 pretrained baseline (eval)
-#   e11         – E11 SAM3 pure replace, single-frame
-#   e12         – E12 SAM3 translate (Sam3QueryToIDR), single-frame
-#   e13         – E13 SAM3 pure replace, 4-frame sequence
-#   e14         – E14 SAM3 video encoder, 4-frame sequence  (needs 16 GB GPU)
-#   e15         – E15 SAM3 video encoder + translate, 4-frame sequence  (needs 16 GB GPU)
-#   e21         – E21 SAM3 video encoder, FPN-capture fix re-run of E14  (needs 16 GB GPU)
+# Live experiments:
+#   eval_idisc              — released iDisc-R101 eval (no training)
+#   finetune_idisc_image    — iDisc-R101 finetune, single-frame
+#   finetune_idisc_video    — iDisc-R101 finetune, 4-frame sequences
+#   finetune_sam3_image     — frozen SAM3 image encoder + iDisc
+#   finetune_sam3_video     — frozen SAM3 video encoder + iDisc (needs 16 GB GPU)
 #
 # Examples:
-#   ./scripts/launch.sh e11
-#   ./scripts/launch.sh e11 --name ablation1
-#   ./scripts/launch.sh e11 --name ablation1 -- finetune.n_iters=100
-#
+#   ./scripts/launch.sh experiment=eval_idisc
+#   ./scripts/launch.sh experiment=finetune_sam3_video finetune.n_iters=100
+#   ./scripts/launch.sh experiment=finetune_sam3_image --name ablation1
 set -euo pipefail
 
-# help with CUDA memory usage
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
 IDISC_REPO="$(cd "$(dirname "$0")/.." && pwd)"
-EXPERIMENT="${1:-}"
-shift
 
-if [[ -z "$EXPERIMENT" ]]; then
-    echo "Usage: $0 <experiment> [--name <label>] [-- <hydra_overrides...>]" >&2
-    echo "Experiments: baseline e11 e12 e13 e14 e15 e21" >&2
+if [[ $# -eq 0 ]]; then
+    echo "Usage: $0 experiment=<name> [hydra overrides...] [--name TAG]" >&2
+    echo "Experiments: eval_idisc finetune_idisc_image finetune_idisc_video"  >&2
+    echo "             finetune_sam3_image finetune_sam3_video" >&2
     exit 1
 fi
 
 RUN_NAME=""
-OVERRIDES=()
-[[ $# -gt 0 && "$1" == "--name" ]] && { RUN_NAME="$2"; shift 2; }
-[[ $# -gt 0 && "$1" == "--" ]] && { shift; OVERRIDES=("$@"); }
+HYDRA_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --name) RUN_NAME="$2"; shift 2 ;;
+        *)      HYDRA_ARGS+=("$1"); shift ;;
+    esac
+done
 
-# Per-experiment SLURM settings
+EXPERIMENT=""
+for a in "${HYDRA_ARGS[@]}"; do
+    [[ "$a" == experiment=* ]] && EXPERIMENT="${a#experiment=}"
+done
+[[ -z "$EXPERIMENT" ]] && { echo "Missing experiment=<name>." >&2; exit 1; }
+
 case "$EXPERIMENT" in
-    baseline)
-        JOB_NAME="iDisc-baseline"
-        HYDRA_EXP="baseline"
-        TIME="2:00:00"
-        CONSTRAINT=""
-        ;;
-    e11)
-        JOB_NAME="iDisc-e11-pure"
-        HYDRA_EXP="sam3_pure"
-        TIME="2:00:00"
-        CONSTRAINT=""
-        ;;
-    e12)
-        JOB_NAME="iDisc-e12-translate"
-        HYDRA_EXP="sam3_translate"
-        TIME="2:00:00"
-        CONSTRAINT=""
-        ;;
-    e13)
-        JOB_NAME="iDisc-e13-pure-seq"
-        HYDRA_EXP="sam3_pure_sequence"
-        TIME="10:00:00"
-        CONSTRAINT=""
-        ;;
-    e14)
-        JOB_NAME="iDisc-e14-video-seq"
-        HYDRA_EXP="sam3_video_sequence"
-        TIME="14:00:00"
-        CONSTRAINT="--constraint=5060ti"
-        ;;
-    e15)
-        JOB_NAME="iDisc-e15-video-translate"
-        HYDRA_EXP="sam3_video_translate"
-        TIME="14:00:00"
-        CONSTRAINT="--constraint=5060ti"
-        ;;
-    e21)
-        JOB_NAME="iDisc-e21-video-fixed"
-        HYDRA_EXP="sam3_video_fixed"
-        TIME="14:00:00"
-        CONSTRAINT="--constraint=5060ti"
-        ;;
+    eval_idisc)           TIME="1:00:00";  CONSTRAINT="" ;;
+    finetune_idisc_image) TIME="4:00:00";  CONSTRAINT="" ;;
+    finetune_idisc_video) TIME="10:00:00"; CONSTRAINT="" ;;
+    finetune_sam3_image)  TIME="4:00:00";  CONSTRAINT="" ;;
+    finetune_sam3_video)  TIME="14:00:00"; CONSTRAINT="--constraint=5060ti" ;;
     *)
-        echo "Unknown experiment: $EXPERIMENT" >&2
-        echo "Valid: baseline e11 e12 e13 e14 e15 e21" >&2
-        exit 1
+        echo "Unknown experiment '$EXPERIMENT'; using defaults (4h, no constraint)." >&2
+        TIME="4:00:00"; CONSTRAINT=""
         ;;
 esac
 
 mkdir -p "$IDISC_REPO/logs"
+[[ -n "$RUN_NAME" ]] && HYDRA_ARGS+=("+run.wandb_name=${RUN_NAME}")
 
-# Build the inner command that SLURM will execute
-if [[ -n "$RUN_NAME" ]]; then
-    OVERRIDES=("+run.wandb_name=${RUN_NAME}" "${OVERRIDES[@]}")
-fi
-
-OVERRIDE_STR=""
-if [[ ${#OVERRIDES[@]} -gt 0 ]]; then
-    OVERRIDE_STR=" ${OVERRIDES[*]}"
-fi
-INNER_CMD="python -u scripts/run_with_hydra.py experiment=${HYDRA_EXP} tracking=wandb${OVERRIDE_STR}"
+INNER_CMD="python -u scripts/run_with_hydra.py tracking=wandb ${HYDRA_ARGS[*]}"
+JOB_NAME="iDisc-${EXPERIMENT}"
 
 WRAP_CMD="set -euo pipefail
 . /etc/profile.d/modules.sh
@@ -127,7 +86,7 @@ SBATCH_ARGS=(
 )
 [[ -n "$CONSTRAINT" ]] && SBATCH_ARGS+=($CONSTRAINT)
 
-echo "Submitting: $EXPERIMENT ($HYDRA_EXP)"
+echo "Submitting: $EXPERIMENT"
 echo "  SLURM args: ${SBATCH_ARGS[*]}"
 echo "  Command:    $INNER_CMD"
 

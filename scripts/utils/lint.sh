@@ -1,8 +1,5 @@
 #!/bin/bash
-
-python3 -m black idisc
-python3 -m black scripts
-python3 -m black splits
-python3 -m isort idisc
-python3 -m isort scripts
-python3 -m isort splits
+# Format and sort imports across the live Python sources.
+set -euo pipefail
+python3 -m black idisc scripts
+python3 -m isort idisc scripts

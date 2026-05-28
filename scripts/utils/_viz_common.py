@@ -34,8 +34,10 @@ def make_writer(fmt: str, fps: int):
                 import imageio_ffmpeg
                 plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
             except ImportError:
-                print("Warning: ffmpeg not found, falling back to GIF")
-                return PillowWriter(fps=fps)
+                raise RuntimeError(
+                    "format=mp4 requires ffmpeg, which was not found. "
+                    "Install ffmpeg (or the imageio-ffmpeg package), or use --format gif."
+                )
         return FFMpegWriter(fps=fps)
     return PillowWriter(fps=fps)
 

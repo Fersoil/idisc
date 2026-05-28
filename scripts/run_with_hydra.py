@@ -137,6 +137,8 @@ def main(cfg: DictConfig) -> None:
             "meta/git_branch": git_branch,
             "meta/git_commit": git_commit,
         }
+        if task == "eval":
+            log_payload["global_step"] = 0
         for key, value in summary.items():
             if isinstance(value, (int, float)):
                 log_payload[f"{task}/{key}"] = value

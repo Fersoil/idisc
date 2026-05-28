@@ -1,0 +1,23 @@
+# @package _global_
+# E13 — Pure SAM3 + Linear(replace), 4-frame sequence dataset (image encoder).
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_sam3_image
+  - override /finetune: image
+
+run:
+  exp_id: E13-online-sam3-sequence
+  dataset_mode: video
+
+method:
+  idr_source: sam3
+  sam_mode: replace
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+
+tags:
+  - sam3-pure
+  - replace
+  - multiclass
+  - sequence

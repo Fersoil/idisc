@@ -1,0 +1,24 @@
+# @package _global_
+# E14 — SAM3 Video encoder + iDisc d2c, replace mode (alias of sam3_video_fixed
+# for historical reasons; identical config — kept for old run logs).
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_sam3_video
+  - override /finetune: video
+
+run:
+  exp_id: E14-online-sam3-video
+  dataset_mode: video
+
+method:
+  idr_source: sam3
+  sam_mode: replace
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+
+tags:
+  - sam3-video
+  - replace
+  - multiclass
+  - sequence

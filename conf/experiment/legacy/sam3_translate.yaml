@@ -1,0 +1,28 @@
+# @package _global_
+# E12 — Pure SAM3 + Sam3QueryToIDR translator, single-frame.
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_sam3_image
+  - override /finetune: image
+  - _self_
+
+run:
+  exp_id: E12-online-sam3-translate
+  dataset_mode: image
+
+method:
+  idr_source: sam3
+  sam_mode: translate
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+
+model:
+  sam3_translate:
+    depths: 2
+    query_in_dim: 256
+
+tags:
+  - sam3-pure
+  - translate
+  - multiclass

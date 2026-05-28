@@ -5,7 +5,7 @@ defaults:
   - override /model: idisc_r101
 
 run:
-  exp_id: eval-idisc
+  exp_id: eval-idisc-image
   task: eval
   dataset_mode: image
 
@@ -19,3 +19,4 @@ method:
 tags:
   - idisc
   - eval
+  - image

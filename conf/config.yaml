@@ -3,7 +3,7 @@ defaults:
   - model: idisc_r101
   - _self_
   - finetune: image
-  - experiment: eval_idisc
+  - experiment: eval_idisc_image
   - paths: cluster
   - tracking: none
 

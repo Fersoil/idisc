@@ -75,6 +75,10 @@ def _validate(runtime: dict[str, Any]) -> None:
         raise ValueError(
             f"idr_source={idr_source!r} is inconsistent with pixel_encoder.name={encoder_name!r}"
         )
+    if encoder_name == "sam3_video" and dataset_mode != "video":
+        raise ValueError(
+            "pixel_encoder.name='sam3_video' requires run.dataset_mode='video'"
+        )
 
     prompt = method.get("prompt", {}) or {}
     prompt_mode = prompt.get("mode")

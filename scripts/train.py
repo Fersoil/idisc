@@ -293,6 +293,11 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
                 total_loss /= valid_frames
             else:
                 data, gt, mask, n_samples = _unpack_batch(batch, device)
+                valid_frames = int(
+                    mask.reshape(n_samples, -1).bool().any(dim=1).sum().item()
+                )
+                if valid_frames == 0:
+                    continue
                 for idx in range(n_samples):
                     # Sequence datasets zero-fill GT for frames without LiDAR;
                     # SILog over zero valid pixels is NaN and poisons training.
@@ -306,11 +311,8 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
                             mask=mask[idx:idx + 1],
                         )
                         loss = sum(v for v in losses["opt"].values())
-                    (loss / n_samples).backward()
+                    (loss / valid_frames).backward()
                     total_loss += loss.item()
-                    valid_frames += 1
-                if valid_frames == 0:
-                    continue
                 total_loss /= valid_frames
 
             nn.utils.clip_grad_norm_(trainable_params, 1.0)

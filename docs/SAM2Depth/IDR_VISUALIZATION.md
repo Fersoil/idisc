@@ -94,7 +94,7 @@ Temporally consistent masklet tracking from `Sam3VideoPixelEncoder`:
 
 ## Reproduction
 
-There are three visualization scripts in `scripts/experiments/`. All require a config file, a model checkpoint, and the KITTI base path.
+There are three visualization scripts in `scripts/utils/`. All require a config file, a model checkpoint, and the KITTI base path.
 
 ### Cluster paths
 
@@ -111,12 +111,12 @@ E20_CKPT    = /work/courses/3dv/team17/models/models_tkwiecinski/E20-sam3-pure-m
 Renders depth prediction, GT depth, and ISD dominant-IDR maps across 3 FPN resolutions. Works with both image and video encoder configs.
 
 ```bash
-python scripts/experiments/visualize_sequence.py \
+python scripts/utils/visualize_sequence.py \
   --config-file <config.json> \
   --model-file  <checkpoint.pt> \
   --base-path   $BASE_PATH \
   --output-dir  outputs/runs/viz_seq \
-  --sam-mode    <none|replace|translate> \
+  --sam-mode    <replace|translate> \
   --start-clip  50 --num-clips 2 --clip-length 4 --fps 1
 ```
 
@@ -125,14 +125,15 @@ Use `--soft-assignment` for weighted-average IDR index (continuous colormap) ins
 Example configs:
 - Image encoder: `configs/kitti/kitti_sam3_translate.json`, `configs/kitti/kitti_sam3.json`
 - Video encoder: `configs/kitti/kitti_sam3_video.json`
-- Baseline (no SAM3): `configs/kitti/kitti_r101.json` with `--sam-mode none`
+
+`--sam-mode` accepts `replace` or `translate` only; the AFP-only (`none`) baseline path is no longer exposed by these scripts.
 
 ### 2. `visualize_sam3.py` — SAM3 image encoder masks
 
 Shows per-frame SAM3 segmentation slot assignments and top-K mask overlays. Requires a SAM3 image encoder config.
 
 ```bash
-python scripts/experiments/visualize_sam3.py \
+python scripts/utils/visualize_sam3.py \
   --config-file configs/kitti/kitti_sam3_translate.json \
   --model-file  <checkpoint.pt> \
   --base-path   $BASE_PATH \
@@ -146,7 +147,7 @@ python scripts/experiments/visualize_sam3.py \
 Uses `Sam3VideoPixelEncoder` for temporally consistent object tracking. Requires a video encoder config (`kitti_sam3_video.json`).
 
 ```bash
-python scripts/experiments/visualize_sam3_masklets.py \
+python scripts/utils/visualize_sam3_masklets.py \
   --config-file configs/kitti/kitti_sam3_video.json \
   --model-file  <checkpoint.pt> \
   --base-path   $BASE_PATH \
@@ -160,7 +161,7 @@ python scripts/experiments/visualize_sam3_masklets.py \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--sam-mode` | `none` | `none` AFP only, `replace` SAM3 linear proj, `translate` Sam3QueryToIDR cross-attention |
+| `--sam-mode` | `replace` | `replace` SAM3 linear proj, `translate` Sam3QueryToIDR cross-attention |
 | `--soft-assignment` | off | Weighted-average IDR index instead of hard argmax (only `visualize_sequence.py`) (note: I didn't really used that) |
 | `--num-masklets` | 6 | Number of top-scoring masklets to display (only `visualize_sam3_masklets.py`) |
 | `--clip-length` | from config | Frames per clip |
@@ -181,19 +182,18 @@ E12=/work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam
 E20=/work/courses/3dv/team17/models/models_tkwiecinski/E20-sam3-pure-multiclass/best_sam_finetuned.pt
 R101=/work/courses/3dv/team17/models/kitti_resnet101.pt
 
-# --- viz_seq: image encoder IDR maps (baseline / replace / translate) ---
-python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_r101.json          --model-file $R101 --base-path $BP --sam-mode none      --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_sam3.json           --model-file $E20  --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_sam3_translate.json --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
+# --- viz_seq: image encoder IDR maps (replace / translate) ---
+python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3.json           --model-file $E20  --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
+python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3_translate.json --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
 # --- viz_seq_video: video encoder IDR maps (replace / translate) ---
-python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E20  --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-python scripts/experiments/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
+python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E20  --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
+python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
 # --- viz_sam3: image encoder SAM3 masks ---
-python scripts/experiments/visualize_sam3.py     --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_sam3      --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
+python scripts/utils/visualize_sam3.py     --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_sam3      --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
 # --- viz_masklets: video encoder masklet tracking (replace / translate) ---
-python scripts/experiments/visualize_sam3_masklets.py --config-file configs/kitti/kitti_sam3_video.json              --model-file $E20 --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_masklets --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9
-python scripts/experiments/visualize_sam3_masklets.py --config-file configs/kitti/kitti_sam3_translate_sequence.json  --model-file $E12 --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_masklets --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9
+python scripts/utils/visualize_sam3_masklets.py --config-file configs/kitti/kitti_sam3_video.json              --model-file $E20 --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_masklets --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9
+python scripts/utils/visualize_sam3_masklets.py --config-file configs/kitti/kitti_sam3_translate_sequence.json  --model-file $E12 --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_masklets --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9
 ```

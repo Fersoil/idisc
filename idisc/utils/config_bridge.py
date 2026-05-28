@@ -1,90 +1,114 @@
-import json
+"""Validate and resolve the Hydra-composed config into a plain dict.
+
+Schema (enforced here):
+  run.task          in {"train", "eval"}
+  run.dataset_mode  in {"image", "video"}
+  method.idr_source in {"afp", "sam3"}
+  method.sam_mode   in {None, "replace", "translate"}; must be None iff idr_source == "afp"
+  method.prompt.mode in {None, "multiclass", "singleclass"};
+                      must be non-None iff a SAM3 pixel_encoder is configured;
+                      when non-None, method.prompt.classes must be non-empty.
+
+The single source of truth for prompt_mode / prompt_classes is method.prompt;
+those values are mirrored into model.pixel_encoder so the encoder factory
+keeps reading from its own config block.
+"""
+
 from pathlib import Path
 from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
-IDR_SOURCE_AND_MODE_TO_VARIANT = {
-    # raw path uses avg_pool2d on hidden states; sam_mode has no effect there
-    ("raw", "none"): "pooled",
-    ("raw", "concat"): "pooled",
-    ("raw", "replace"): "pooled",
-    ("afp", "none"): "baseline",
-    ("afp", "replace"): "sam-replace",
-    ("afp", "concat"): "sam-concat",
-    ("afp", "translate"): "sam-translate",
-}
+
+_VALID_TASKS = {"train", "eval"}
+_VALID_DATASET_MODES = {"image", "video"}
+_VALID_IDR_SOURCES = {"afp", "sam3"}
+_VALID_SAM_MODES = {None, "replace", "translate"}
+_VALID_PROMPT_MODES = {None, "multiclass", "singleclass"}
 
 
-def _to_config(cfg: DictConfig | dict[str, Any]) -> DictConfig:
+def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
     if isinstance(cfg, DictConfig):
-        return cfg
-    return OmegaConf.create(cfg)
+        resolved = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    else:
+        resolved = OmegaConf.to_container(
+            OmegaConf.create(cfg), resolve=True, throw_on_missing=True
+        )
+    resolved.pop("hydra", None)
+    return resolved
 
 
-def _load_legacy_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+def _validate(runtime: dict[str, Any]) -> None:
+    task = runtime.get("run", {}).get("task")
+    if task not in _VALID_TASKS:
+        raise ValueError(f"run.task must be one of {_VALID_TASKS}, got {task!r}")
 
+    dataset_mode = runtime.get("run", {}).get("dataset_mode")
+    if dataset_mode not in _VALID_DATASET_MODES:
+        raise ValueError(
+            f"run.dataset_mode must be one of {_VALID_DATASET_MODES}, got {dataset_mode!r}"
+        )
 
-def _resolve_legacy_path(cfg: DictConfig, repo_root: Path | None = None) -> Path:
-    legacy_rel = cfg.dataset.legacy_config_path
-    candidate = Path(legacy_rel)
-    if candidate.is_absolute():
-        return candidate
+    method = runtime.get("method", {})
+    idr_source = method.get("idr_source")
+    sam_mode = method.get("sam_mode")
+    if idr_source not in _VALID_IDR_SOURCES:
+        raise ValueError(
+            f"method.idr_source must be one of {_VALID_IDR_SOURCES}, got {idr_source!r}"
+        )
+    if sam_mode not in _VALID_SAM_MODES:
+        raise ValueError(
+            f"method.sam_mode must be one of {_VALID_SAM_MODES}, got {sam_mode!r}"
+        )
+    if idr_source == "afp" and sam_mode is not None:
+        raise ValueError("method.sam_mode must be null when idr_source='afp'")
+    if idr_source == "sam3" and sam_mode is None:
+        raise ValueError(
+            "method.sam_mode must be 'replace' or 'translate' when idr_source='sam3'"
+        )
 
-    root = repo_root if repo_root is not None else Path.cwd()
-    return (root / candidate).resolve()
+    encoder_name = (
+        runtime.get("model", {}).get("pixel_encoder", {}).get("name", "")
+    )
+    is_sam3_encoder = encoder_name in ("sam3_image", "sam3_video")
+    if (idr_source == "sam3") != is_sam3_encoder:
+        raise ValueError(
+            f"idr_source={idr_source!r} is inconsistent with pixel_encoder.name={encoder_name!r}"
+        )
+
+    prompt = method.get("prompt", {}) or {}
+    prompt_mode = prompt.get("mode")
+    if prompt_mode not in _VALID_PROMPT_MODES:
+        raise ValueError(
+            f"method.prompt.mode must be one of {_VALID_PROMPT_MODES}, got {prompt_mode!r}"
+        )
+    if is_sam3_encoder and prompt_mode is None:
+        raise ValueError("SAM3 encoders require method.prompt.mode to be set")
+    if prompt_mode is not None and not prompt.get("classes"):
+        raise ValueError(
+            f"method.prompt.mode={prompt_mode!r} requires non-empty method.prompt.classes"
+        )
 
 
 def build_runtime_config(
     cfg: DictConfig | dict[str, Any], repo_root: str | Path | None = None
 ) -> dict[str, Any]:
-    """Merge legacy JSON config with Hydra overlays and return a resolved dict.
+    runtime = _to_container(cfg)
+    _validate(runtime)
 
-    Precedence (last wins):
-      1) legacy JSON base config
-      2) Hydra composed config (including CLI overrides)
-    """
-    hydra_cfg = _to_config(cfg)
-    repo_path = Path(repo_root).resolve() if repo_root is not None else None
-    legacy_path = _resolve_legacy_path(hydra_cfg, repo_root=repo_path)
+    method = runtime["method"]
+    prompt = method.get("prompt", {}) or {}
+    prompt_mode = prompt.get("mode")
+    prompt_classes = list(prompt.get("classes") or [])
 
-    legacy_cfg = OmegaConf.create(_load_legacy_json(legacy_path))
+    # Mirror prompt config into pixel_encoder so the encoder factory finds it.
+    encoder_cfg = runtime.setdefault("model", {}).setdefault("pixel_encoder", {})
+    if encoder_cfg.get("name", "").startswith("sam3"):
+        encoder_cfg["prompt_mode"] = prompt_mode
+        encoder_cfg["prompt_classes"] = prompt_classes
 
-    overlay_cfg = OmegaConf.create(
-        OmegaConf.to_container(hydra_cfg, resolve=True, throw_on_missing=True)
-    )
-    if "hydra" in overlay_cfg:
-        del overlay_cfg["hydra"]
-
-    merged = OmegaConf.merge(legacy_cfg, overlay_cfg)
-    runtime = OmegaConf.to_container(merged, resolve=True, throw_on_missing=True)
-
-    method_cfg = runtime.get("method", {})
-    idr_source = method_cfg.get("idr_source", "afp")
-    sam_mode = method_cfg.get("sam_mode", "none")
-    variant_key = (idr_source, sam_mode)
-    if variant_key not in IDR_SOURCE_AND_MODE_TO_VARIANT:
-        raise ValueError(f"Unknown idr_source/sam_mode combination: {variant_key}")
-
-    prompt_cfg = method_cfg.get("prompt", {})
-    prompt_mode = prompt_cfg.get("mode")
-    if prompt_mode is None:
-        prompt_mode = method_cfg.get("prompt_mode", "none")
-
-    runtime["variant"] = IDR_SOURCE_AND_MODE_TO_VARIANT[variant_key]
+    # Convenience top-level pointer used by callers that don't want to dig.
     runtime["prompt_mode"] = prompt_mode
-    runtime["prompt"] = {
-        "mode": prompt_mode,
-        "classes": prompt_cfg.get("classes", []),
-        "use_bbox": prompt_cfg.get("use_bbox", False),
-        "strategy": prompt_cfg.get("strategy"),
-    }
-
-    # Keep method.prompt_mode aligned for any downstream code that reads it.
-    runtime.setdefault("method", {})
-    runtime["method"]["prompt_mode"] = prompt_mode
 
     return runtime
 

@@ -62,6 +62,12 @@ def init_tracking(cfg: Any, run_dir: str | Path):
         config=cfg_dict,
     )
 
+    # Align metric axes across experiments by using a shared global step.
+    wandb.define_metric("global_step")
+    wandb.define_metric("train/*", step_metric="global_step")
+    wandb.define_metric("val/*", step_metric="global_step")
+    wandb.define_metric("eval/*", step_metric="global_step")
+
     _ACTIVE_RUN.summary["run.exp_id"] = run_cfg.get("exp_id")
     _ACTIVE_RUN.summary["dataset"] = dataset_cfg.get("dataset_name")
     _ACTIVE_RUN.summary["method.variant"] = method_cfg.get("variant")

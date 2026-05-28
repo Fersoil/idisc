@@ -47,7 +47,11 @@ logs/
 
 # hydra
 outputs/
+output/
 results/
+
+# generated diagrams
+docs/diagrams/
 
 
 # I am not sure about this

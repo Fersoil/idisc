@@ -1,2 +1,34 @@
+# @package _global_
 dataset_name: kitti
-legacy_config_path: configs/kitti/kitti_r101.json
+data:
+  crop: garg
+  data_root: datasets/kitti
+  benchmark: false
+  manifest_path: ${paths.sequence_manifest}
+  clip_length: 4
+  augmentations:
+    horizontal_flip: 0.5
+    random_rotation: 2.5
+    random_scale: 0.05
+    random_translation: 0.05
+    random_brightness: 0.1
+    random_contrast: 0.1
+    random_saturation: 0.1
+    random_gamma: 0.2
+    random_hue: 0.1
+    random_sharpness: 0.1
+    random_posterize: 4
+    random_solarize: 0.2
+    rotation_p: 1
+    scale_p: 1
+    translation_p: 0
+    brightness_p: 1
+    contrast_p: 1
+    saturation_p: 1
+    gamma_p: 1
+    hue_p: 1
+    sharpness_p: 0
+    posterize_p: 0
+    solarize_p: 0
+    equalize_p: 0
+    autocontrast_p: 0

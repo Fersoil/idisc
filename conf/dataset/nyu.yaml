@@ -1,2 +1,32 @@
+# @package _global_
 dataset_name: nyu
-legacy_config_path: configs/nyu/nyu_r101.json
+data:
+  crop: eigen
+  data_root: datasets/nyu
+  benchmark: false
+  augmentations:
+    horizontal_flip: 0.5
+    random_rotation: 5
+    random_scale: 0.1
+    random_translation: 0.1
+    random_brightness: 0.1
+    random_contrast: 0.1
+    random_saturation: 0.1
+    random_gamma: 0.1
+    random_hue: 0.1
+    random_sharpness: 0.1
+    random_posterize: 4
+    random_solarize: 0.2
+    rotation_p: 1
+    scale_p: 1
+    translation_p: 1
+    brightness_p: 1
+    contrast_p: 1
+    saturation_p: 1
+    gamma_p: 1
+    hue_p: 1
+    sharpness_p: 0
+    posterize_p: 0
+    solarize_p: 0
+    equalize_p: 0
+    autocontrast_p: 0

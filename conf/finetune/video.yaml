@@ -2,5 +2,5 @@ n_iters: 5000
 lr: 5.0e-5
 batch_size: 1
 val_interval: 500
-output_dir: finetune_output/${run.exp_id}
-use_sequence_dataset: true
+output_dir: output/models/${run.exp_id}
+amp_dtype: bfloat16

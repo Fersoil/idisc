@@ -1,0 +1,47 @@
+# @package _global_
+generic:
+  seed: 13
+training:
+  n_iters: 40000
+  batch_size: 2
+  validation_interval: 200
+  nsteps_accumulation_gradient: 4
+  lr: 0.0002
+  wd: 0.05
+  div_factor: 1
+  final_div_factor: 10
+  loss:
+    name: SILog
+    weight: 10.0
+model:
+  num_heads: 1
+  attn_dec: true
+  activation: gelu
+  expansion: 4
+  output_dim: 1
+  isd:
+    latent_dim: 128
+    num_resolutions: 3
+    depths: 2
+  pixel_decoder:
+    heads: 4
+    depths: 6
+    hidden_dim: 256
+    anchor_points: 8
+  pixel_encoder:
+    img_size: [1216, 352]
+    name: sam3_video
+    lr_dedicated: 0.0
+    sam_checkpoint: ${paths.sam_checkpoint}
+    load_from_HF: false
+    freeze_sam3: true
+    use_presence_score: true
+    top_k_queries: 200
+    confidence_threshold: 0.3
+    max_instances: 30
+    # prompt_mode / prompt_classes injected from method.prompt by config_bridge
+  afp:
+    context_low_resolutions_skip: 1
+    depths: 2
+    latent_dim: 128
+    num_latents: 32

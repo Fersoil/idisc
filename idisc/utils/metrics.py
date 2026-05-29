@@ -39,6 +39,8 @@ class RunningMetric(object):
         splits = tuple((c_gt.flatten().size(0) for c_gt in gt))
         if mask is not None:
             mask = mask.bool()
+            if mask.sum().item() == 0:
+                return
             pred = pred[mask]
             gt = gt[mask]
             splits = tuple(mask.reshape(mask.shape[0], -1).sum(dim=-1).cpu().numpy())

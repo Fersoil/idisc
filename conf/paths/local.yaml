@@ -3,4 +3,4 @@ pretrained_model: models/kitti_resnet101.pt
 sam_checkpoint: null
 kitti_root: datasets/kitti
 sequence_manifest: splits/kitti/sequence_manifest.json
-outputs_root: outputs/runs
+outputs_root: output/runs

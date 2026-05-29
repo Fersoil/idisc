@@ -1,0 +1,22 @@
+# @package _global_
+# Evaluate the released iDisc (resnet101 + AFP) on KITTI single-frame data.
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_r101
+
+run:
+  exp_id: eval-idisc-image
+  task: eval
+  dataset_mode: image
+
+method:
+  idr_source: afp
+  sam_mode: null
+  prompt:
+    mode: null
+    classes: []
+
+tags:
+  - idisc
+  - eval
+  - image

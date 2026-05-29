@@ -1,24 +1,24 @@
 defaults:
   - dataset: kitti
+  - model: idisc_r101
   - _self_
-  - finetune: default
-  - experiment: baseline
+  - finetune: image
+  - experiment: eval_idisc_image
   - paths: cluster
   - tracking: none
 
 run:
   task: eval
-  exp_id: E1-baseline
+  exp_id: eval-idisc
   name: ${run.exp_id}
+  dataset_mode: image
 
 method:
   idr_source: afp
-  sam_mode: none
+  sam_mode: null
   prompt:
-    mode: none
+    mode: null
     classes: []
-    use_bbox: false
-    strategy: none
 
 tags: []
 

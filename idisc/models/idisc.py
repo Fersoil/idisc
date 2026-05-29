@@ -3,11 +3,14 @@ Author: Luigi Piccinelli
 Licensed under the CC-BY NC 4.0 license (http://creativecommons.org/licenses/by-nc/4.0/)
 
 Top-level `IDisc` model. Composes pixel_encoder → pixel_decoder → AFP/IDR → ISD.
-`sam_mode` controls the IDR source: "none" (AFP only), "replace" (SAM3 queries only),
-"concat" (AFP + SAM3), "translate" (Sam3QueryToIDR cross-attention), "random_idrs" (ablation).
+`sam_mode` selects the IDR source when SAM3 queries are present:
+  - None        — encoder produces no queries; IDRs come from AFP (baseline).
+  - "replace"   — IDRs come from a Linear projection of SAM3 queries (sam3_proj).
+  - "translate" — IDRs come from cross-attention over SAM3 queries (Sam3QueryToIDR).
 `IDisc.build(config)` is the canonical constructor — do not call __init__ directly.
 """
 
+import warnings
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
 
@@ -68,27 +71,24 @@ class IDisc(nn.Module):
         self,
         image: torch.Tensor,
         instance_queries=None,
-        raw_idrs=None,
-        sam_mode="concat",
+        sam_mode=None,
         gt: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
         pre_extracted_encoder_outputs: Optional[Tuple[torch.Tensor, ...]] = None,
     ):
         """
         Args:
-            instance_queries: SAM3 query embeddings (K, 256) for projection path
-            raw_idrs: Pre-computed IDR tuple (skips AFP and sam3_proj)
-            sam_mode: "concat", "replace", "translate", "random_idrs", "none"
+            instance_queries: SAM3 query embeddings (K, 256) for sam_mode in
+                {replace, translate}. If None, IDRs come from AFP.
+            sam_mode: None | "replace" | "translate".
             pre_extracted_encoder_outputs: If provided, skip the pixel_encoder
-                call. Tuple of FPN feature maps (already in inverted order
-                matching what pixel_decoder expects). Used by the video encoder
-                training loop to avoid double-running the backbone.
+                call. Used by the video encoder training loop to avoid
+                double-running the backbone.
         """
         losses = {"opt": {}, "stat": {}}
         original_shape = gt.shape[-2:] if gt is not None else image.shape[-2:]
 
         if pre_extracted_encoder_outputs is not None:
-            # Video encoder path: FPN already extracted outside this call.
             encoder_outputs = pre_extracted_encoder_outputs
         else:
             encoder_outputs = self.pixel_encoder(image)
@@ -99,16 +99,11 @@ class IDisc(nn.Module):
                     instance_queries = encoder_queries
             encoder_outputs = self.invert_encoder_output_order(encoder_outputs)
 
-        # DefAttn Decoder + filter useful resolutions (usually skip the lowest one)
         fpn_outputs, decoder_outputs = self.pixel_decoder(encoder_outputs)
-
         decoder_outputs = self.filter_decoder_relevant_resolutions(decoder_outputs)
         fpn_outputs = self.filter_decoder_relevant_resolutions(fpn_outputs)
 
-        if raw_idrs is not None:
-            # Branch/replace bypass: use pre-computed IDRs directly (e.g. old avg_pool2d path)
-            idrs = raw_idrs
-        elif instance_queries is not None and instance_queries.shape[0] > 0:
+        if instance_queries is not None and instance_queries.shape[0] > 0:
             iq = instance_queries.unsqueeze(0) if instance_queries.dim() == 2 else instance_queries
             if sam_mode == "translate":
                 if self.sam3_translate is None:
@@ -117,15 +112,7 @@ class IDisc(nn.Module):
                     )
                 idrs = self.sam3_translate(iq)
             else:
-                sam_idrs = tuple(proj(iq) for proj in self.sam3_proj)
-                if sam_mode == "replace":
-                    idrs = sam_idrs
-                else:  # concat (default)
-                    idrs = self.afp(decoder_outputs)
-                    idrs = tuple(
-                        torch.cat([afp_idr, sam_idr], dim=1)
-                        for afp_idr, sam_idr in zip(idrs, sam_idrs)
-                    )
+                idrs = tuple(proj(iq) for proj in self.sam3_proj)
         else:
             idrs = self.afp(decoder_outputs)
         outs = self.isd(fpn_outputs, idrs)
@@ -184,21 +171,38 @@ class IDisc(nn.Module):
         new_state_dict = deepcopy(
             {k.replace("module.", ""): v for k, v in dict_model.items()}
         )
-        self.load_state_dict(new_state_dict, strict=False)
+        # strict=False is intentional: the frozen SAM3 backbone is rebuilt from
+        # sam_checkpoint at construction, so its keys are never in a head
+        # checkpoint and show up as (expected) missing keys. We warn about the
+        # two cases that actually signal a mismatch.
+        info = self.load_state_dict(new_state_dict, strict=False)
+        if info.unexpected_keys:
+            # Checkpoint weights with no home in this model — a red flag
+            # (architecture/checkpoint drift), so list them in full.
+            warnings.warn(
+                f"load_pretrained({model_file}): {len(info.unexpected_keys)} "
+                f"unexpected key(s) ignored: {info.unexpected_keys}",
+                stacklevel=2,
+            )
 
-    def get_params(self, config):
-        backbone_lr = config["model"]["pixel_encoder"].get(
-            "lr_dedicated", config["training"]["lr"] / 10
-        )
-        params = [
-            {"params": self.pixel_decoder.parameters()},
-            {"params": self.afp.parameters()},
-            {"params": self.isd.parameters()},
-            {"params": self.pixel_encoder.parameters()},
-            {"params": self.sam3_proj.parameters()},
-        ]
-        max_lrs = [config["training"]["lr"]] * 3 + [backbone_lr] + [config["training"]["lr"]]
-        return params, max_lrs
+        frozen_prefixes = ("pixel_encoder.sam_model.", "pixel_encoder.video_model.")
+        head_missing = [k for k in info.missing_keys
+                        if not k.startswith(frozen_prefixes)]
+        if head_missing:
+            # A non-backbone missing key is a trainable param left at random init.
+            # Group by top-level module so e.g. unused sam3_proj in the baseline
+            # is distinguishable from a genuinely dropped pixel_decoder/isd weight.
+            by_module: Dict[str, int] = {}
+            for k in head_missing:
+                top = k.split(".", 1)[0]
+                by_module[top] = by_module.get(top, 0) + 1
+            summary = ", ".join(f"{m}: {n}" for m, n in sorted(by_module.items()))
+            warnings.warn(
+                f"load_pretrained({model_file}): {len(head_missing)} non-backbone "
+                f"key(s) left at init (per module: {summary}). These are trainable "
+                f"params the checkpoint did not provide — confirm this is intended.",
+                stacklevel=2,
+            )
 
     @property
     def device(self):
@@ -206,6 +210,11 @@ class IDisc(nn.Module):
 
     @classmethod
     def build(cls, config: Dict[str, Dict[str, Any]]):
+        # Copy-on-write: build() writes derived values (e.g. embed_dims) back into
+        # the config so the sub-builders below can read them, but the caller's
+        # config is the resolved source-of-truth that gets snapshotted — do not
+        # mutate it.
+        config = deepcopy(config)
         pixel_encoder_img_size = config["model"]["pixel_encoder"]["img_size"]
         pixel_encoder_pretrained = config["model"]["pixel_encoder"].get(
             "pretrained", None

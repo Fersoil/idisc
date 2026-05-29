@@ -1,6 +1,6 @@
 # Experiments (LEGACY)
 
-> **This document covers the E1–E10 hypothesis phase.** Empirical findings from E11–E20 are in [SAM3_EXPERIMENTS.md](SAM3_EXPERIMENTS.md). Core conclusion: SAM3 queries do not improve depth — the FPN path drives all predictions.
+> **This document covers the E1–E10 hypothesis phase.** Empirical findings from E11–E20 are in [legacy_SAM3_EXPERIMENTS.md](legacy_SAM3_EXPERIMENTS.md). Core conclusion: SAM3 queries do not improve depth — the FPN path drives all predictions.
 
 ---
 

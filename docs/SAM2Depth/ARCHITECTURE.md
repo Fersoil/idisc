@@ -2,7 +2,13 @@
 
 ## Overview
 
-This fork replaces iDisc's ResNet/Swin pixel encoder with a frozen SAM3 backbone (~840 M params). SAM3's internal feature pyramid (FPN) drives all depth prediction; a small trainable head (~12 M params) comprising `pixel_decoder`, `AFP/ISD`, and `sam3_proj` trains from random init on KITTI. Query embeddings extracted from SAM3's transformer decoder are routed through the head but have been found empirically to contribute negligible signal — the FPN is the only information source that matters.
+This fork replaces iDisc's ResNet/Swin pixel encoder with a frozen SAM3 backbone (~840M
+params). SAM3's internal feature pyramid (FPN) provides the features that drive depth
+prediction, and a small trainable head (~12M params, the size of `best_sam_finetuned.pt`)
+made up of `pixel_decoder`, `AFP`/`ISD`, and `sam3_proj` is trained from random
+initialization on KITTI. Query embeddings from SAM3's transformer decoder are also routed
+through the head, but in practice they contribute very little.
+The plain ResNet-101 iDisc, without SAM3, is kept as the baseline.
 
 ---
 
@@ -10,39 +16,45 @@ This fork replaces iDisc's ResNet/Swin pixel encoder with a frozen SAM3 backbone
 
 | File | Role |
 |------|------|
-| `idisc/models/sam3_encoder.py` | `Sam3PixelEncoder` — wraps `Sam3Processor` (image-only); extracts 3-level FPN + 200 decoder-slot queries per frame. Hooks `transformer.decoder` to capture hidden states. |
-| `idisc/models/sam3_video_encoder.py` | `Sam3VideoPixelEncoder` — wraps `Sam3VideoInference` (video model); processes 4-frame clips with temporal tracker propagation. |
-| `idisc/models/id_module.py` | `AFP` (Attention Feature Pyramid), `ISD` (Internal Slots Decoder), `Sam3QueryToIDR` (cross-attention query translator). |
-| `idisc/models/idisc.py` | `IDisc` top-level model; builds encoder + pixel_decoder + AFP/ISD; `forward` dispatches by `sam_mode`. |
-| `idisc/dataloaders/kitti_sequence.py` | `KITTISequenceDataset` — emits `(B, T, 3, H, W)` clips with stride-based non-overlapping sampling. |
-| `scripts/experiments/finetune_sam.py` | Training loop invoked by `run_with_hydra.py`; handles freeze/unfreeze, per-param-group LR, sequence flattening, NaN guard. |
-| `scripts/experiments/eval_depth.py` | Evaluation loop (abs_rel, d1, rmse, etc.); invoked by `run_with_hydra.py` for `task=eval`. |
+| `idisc/models/sam3_encoder.py` | `Sam3PixelEncoder`: wraps the SAM3 image model (image only). Extracts a 3-level FPN and 200 decoder-slot queries per frame, hooking the transformer decoder to capture hidden states. |
+| `idisc/models/sam3_video_encoder.py` | `Sam3VideoPixelEncoder`: wraps `Sam3VideoInference`. Processes 4-frame clips with temporal tracker propagation and exposes per-frame FPN plus queries. |
+| `idisc/models/id_module.py` | `AFP` (Attention Feature Pyramid), `ISD` and `ISDHead` (Internal Slots Decoder), `Sam3QueryToIDR` (the cross-attention query translator). |
+| `idisc/models/idisc.py` | `IDisc`, the top-level model. Builds the encoder, `pixel_decoder`, and `AFP`/`ISD`; `forward` selects the IDR source by `sam_mode`. |
+| `idisc/dataloders/kitti_sequence.py` | `KITTISequenceDataset`, which emits `(T, 3, H, W)` clips with stride-based non-overlapping sampling.  |
+| `scripts/train.py` | `run_train`, the training loop called by `run_with_hydra.py` for `task=train`. Handles freeze/unfreeze, per-param-group LR, sequence flattening, and the NaN guard. |
+| `scripts/experiments/eval_depth.py` | `run_eval`, the evaluation loop (abs_rel, d1, rmse, and so on), called for `task=eval`. |
+| `scripts/run_with_hydra.py` | The Hydra entrypoint. Composes the config, writes `resolved_config.yaml` and `metrics.json` per run, and dispatches train or eval. |
 
 ---
 
 ## Running experiments
 
+`scripts/launch.sh` wraps `run_with_hydra.py` in an `sbatch` call with the account, time,
+GPU constraint, CUDA module, and venv already set. Run it directly, not through `sbatch`.
+
 ```bash
-./scripts/launch.sh <key> [-- <hydra_overrides>]
+./scripts/launch.sh experiment=<name> [hydra.overrides...] [--name TAG]
 ```
 
-| Key | Experiment | Notes |
-|-----|-----------|-------|
-| `baseline` | E1 iDisc-R101 pretrained | eval only, ~2 min |
-| `e11` / `e20` | SAM3 pure, single-frame, replace | ~2h |
-| `e12` | SAM3 translate (Sam3QueryToIDR) | ~2h |
-| `e18` | SAM3 pure + 4-frame sequence | ~5h |
-| `e17` | SAM3 translate + sequence | ~14h |
-| `e19` | SAM3 video encoder + sequence | ~14h, requires 16 GB GPU |
-| `cache` | Pre-compute SAM3 video queries | ~4h |
+| `experiment=` | What | Notes |
+|---------------|------|-------|
+| `eval_idisc_image` | Released iDisc-R101 eval, single-frame | no training, ~1 h slot |
+| `eval_idisc_video` | Released iDisc-R101 eval, 4-frame clips | no training |
+| `finetune_idisc_image` | iDisc-R101 finetune, single-frame | AFP baseline |
+| `finetune_idisc_video` | iDisc-R101 finetune, 4-frame clips | AFP baseline |
+| `finetune_sam3_image` | Frozen SAM3 image encoder + iDisc | `replace` by default |
+| `finetune_sam3_video` | Frozen SAM3 video encoder + iDisc | needs a 16 GB GPU (`--constraint=5060ti`) |
 
-**Override examples:**
+Override examples:
 ```bash
-./scripts/launch.sh e11 -- finetune.n_iters=500       # quick shakedown
-./scripts/launch.sh e18 -- finetune.lr=1e-4           # LR sweep
+./scripts/launch.sh experiment=finetune_sam3_image finetune.n_iters=500       # quick shakedown
+./scripts/launch.sh experiment=finetune_sam3_image method.sam_mode=translate  # translate mode
+./scripts/launch.sh experiment=finetune_sam3_image --name ablation1
 ```
 
-Output dirs: `outputs/runs/<timestamp>_<exp_id>_<git_sha>/` and `finetune_output/<exp_id>/`.
+Each run produces `output/runs/<timestamp>_<exp_id>_<git_sha>/` (holding
+`resolved_config.yaml`, `metrics.json`, `manifest.json`, and `stdout.log`) and checkpoints
+under `output/models/<exp_id>/`.
 
 ---
 
@@ -52,45 +64,47 @@ Output dirs: `outputs/runs/<timestamp>_<exp_id>_<git_sha>/` and `finetune_output
 KITTI RGB frame  (B, 3, 352, 1216)
        │
        ▼
-Sam3PixelEncoder.forward(image)
+pixel_encoder.forward(image)         (Sam3PixelEncoder / Sam3VideoPixelEncoder / ResNet)
   ├── SAM3 backbone.forward_image()  ──► FPN [3 × (B, 256, H/s, W/s)]
-  └── decoder hook ──────────────────► queries (B, 200, 256)
+  └── decoder hook ──────────────────► queries (B, 200, 256)   [SAM3 encoders only]
        │                                      │
        ▼                                      ▼
-IDisc.forward()                        sam3_proj / Sam3QueryToIDR
+IDisc.forward(image, instance_queries, sam_mode)
   ├── MSDeformAttnPixelDecoder(FPN) ──► refined FPN + decoder_outputs
-  ├── AFP(decoder_outputs) ──────────► IDRs  (B, 32, 128)  [replace: skipped]
-  ├── sam_mode dispatch:
-  │     replace ──► sam3_proj(queries) → IDRs
-  │     translate ► Sam3QueryToIDR(queries) → IDRs
-  │     none ────► AFP only
+  ├── IDR source dispatch:
+  │     queries + sam_mode=replace   ──► sam3_proj(queries)        → IDRs
+  │     queries + sam_mode=translate ──► Sam3QueryToIDR(queries)   → IDRs
+  │     no queries (baseline)        ──► AFP(decoder_outputs)      → IDRs (B, 32, 128)
   └── ISD(fpn, IDRs) ─────────────────► depth map (B, 1, H, W)
 ```
 
----
+![](gifs/architecture.png)
 
-## Config system
-
-Each experiment uses two config files:
-
-1. **Hydra YAML** (`conf/experiment/<name>.yaml`) — sets `run.exp_id`, `run.task`, `method.sam_mode`, dataset path, finetune hyperparams.
-2. **Legacy JSON** (`configs/kitti/kitti_sam3*.json`) — sets model architecture (encoder name, prompt_mode, top_k_queries, clip_length, stride).
-
-`run_with_hydra.py` merges them: legacy JSON is the base; YAML overrides take precedence.
-
-**Adding a new experiment (3 steps):**
-1. Copy the closest legacy JSON and edit (e.g., `configs/kitti/kitti_sam3_new.json`).
-2. Create `conf/experiment/sam3_new.yaml` pointing at the new JSON.
-3. Add a case entry in `scripts/launch.sh` with the new key.
+`sam_mode` only matters when SAM3 queries are present. The plain iDisc baseline always
+takes the AFP path (the `instance_queries is None` branch in `idisc/models/idisc.py`,
+`forward`).
 
 ---
 
-## Current findings (summary)
+## Config system (pure Hydra)
 
-See [SAM3_EXPERIMENTS.md](SAM3_EXPERIMENTS.md) for the full run log.
+Configuration is composed entirely from `conf/`; there are no legacy JSON configs in this
+path anymore.
 
-- **The FPN path drives all depth.** Query content (zeros, real tokens, 200-token multiclass) is invariant to val abs\_rel at convergence.
-- **Best result: 0.0818 abs\_rel** (E11/E20, 5k iters, frozen SAM3, single-frame) vs 0.0600 for pretrained iDisc-R101 baseline.
-- **Sequence training** (4-frame clips, stride=4) does not improve at comparable iter budgets; adds a training instability spike at step ~1000.
-- **SAM3 video encoder** (temporal tracker memory) diverges during training due to train/val distribution mismatch (tracker memory populated during training, empty during val).
-- **Next high-impact direction:** unfreeze SAM3 neck (`vision_backbone.convs`) with 0.1× backbone LR to improve the FPN features that actually drive depth.
+- `conf/config.yaml`: root defaults for `dataset`, `model`, `finetune`, `experiment`, `paths`, and `tracking`, plus the `run` and `method` blocks.
+- `conf/experiment/<name>.yaml` (`# @package _global_`): one file per live experiment. It overrides `model`, `dataset`, and `finetune`, and sets `run.{exp_id,task,dataset_mode}`, `method.{idr_source,sam_mode,prompt}`, and `tags`.
+- `conf/model/`: `idisc_r101`, `idisc_sam3_image`, `idisc_sam3_video` (encoder plus head architecture).
+- `conf/finetune/`: `image`, `video` (iters, LR, batch, checkpoint dir).
+- `conf/paths/`: `cluster`, `local`. `conf/tracking/`: `none`, `wandb`.
+
+`run_with_hydra.py` composes the config, runs `build_runtime_config`
+(`idisc/utils/config_bridge.py`) to flatten it into the runtime dict, and snapshots it to
+`resolved_config.yaml`. The visualization and evaluation scripts read that
+`resolved_config.yaml`, not the `conf/` tree.
+
+To add a new experiment:
+1. If it needs a new architecture, add a `conf/model/<name>.yaml`.
+2. Add `conf/experiment/<name>.yaml`, overriding the right model/dataset/finetune and setting `run` and `method`.
+3. Add a case in `scripts/launch.sh` (time and GPU constraint) so `experiment=<name>` launches.
+
+---

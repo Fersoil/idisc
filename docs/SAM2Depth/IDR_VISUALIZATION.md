@@ -1,199 +1,191 @@
 # IDR Visualization Results
 
-Qualitative analysis of Implicit Depth Representations (IDRs) across iDisc baseline, SAM3 image encoder, and SAM3 video encoder modes on KITTI sequences (here visualized mostly on clips 50-51, drive 0046, but the trend is more general).
+Qualitative analysis of IDRs across the iDisc baseline,
+the SAM3 image encoder, and the SAM3 video encoder on KITTI videos.
+
+All models below are the May-2026 finetuning runs in ` /work/courses/3dv/team17/results/models`, all trained in
+`replace` mode (SAM3 decoder queries projected straight into IDRs via `sam3_proj`)
+
+## Models compared
+
+| Run (`/work/courses/3dv/team17/results/models`) | Encoder | IDR source | best abs_rel |
+|---|---|---|---:|
+| `finetune-idisc-image` | ResNet-101 | AFP | **0.060** |
+| `finetune-idisc-video` | ResNet-101 | AFP | **0.059** |
+| `finetune-sam3-image`  | SAM3 image (frozen) | SAM3 → `replace` | 0.084 |
+| `finetune-sam3-video`  | SAM3 video (frozen) | SAM3 → `replace` | 0.103 |
 
 ---
 
-## Key Findings
+## Key findings
 
-1. **SAM3 video representations are clearly different from image-only ones.** The IDR maps produced by the video encoder have a visibly distinct structure compared to single-frame SAM3 or the AFP baseline, confirming that temporal conditioning changes the learned representations — not just refines them.
+1. SAM3 IDRs do not beat the AFP baseline. SAM3-image reaches 0.084 and
+   SAM3-video 0.103 abs_rel (behind 0.060 of the plain iDisc
+   baselines)
 
-2. **iDisc baseline IDRs are flickery on sequential data.** When the AFP-only baseline is evaluated frame-by-frame over a clip, the dominant IDR assignment maps exhibit noticeable temporal inconsistency — IDR indices jump between frames even for static scene regions.
+2. ISD attention over the IDR tokens is diffuse. Entropy is ~3.37/3.47 for the 32 AFP
+   latents and ~4.84/5.30 for the 200 SAM3 queries (91–97% of the uniform max). Pixels
+   barely select individual tokens, so depth comes from the FPN, not the IDR path.
 
-3. **SAM3 video masklets are correct.** The tracker-propagated masklet IDs remain stable across frames, with consistent object segmentation. The masklet visualization confirms that SAM3's video encoder produces temporally coherent object tokens.
-
-4. **Depth estimation with SAM3 video mode performs poorly.** Despite correct masklets, the video encoder yields abs_rel ~0.22 vs ~0.08 for image-mode SAM3 (see experiments E14 vs E11/E12 in `SAM3_EXPERIMENTS.md`). The `sam3_proj` weights were not trained for temporally-propagated video queries, causing a large quality drop in actual depth prediction.
+3. SAM3-video depth is poorly calibrated outside supervised regions. The depth scale blows
+   up over sky (no GT under the Garg crop), while baseline and SAM3-image stay in a
+   sensible 0–80 m range.
 
 ---
 
-## Visual Comparisons
+## Visual comparisons
 
-All GIFs are in `gifs/` and show 4-frame clips at 1 fps from KITTI drive 0046.
+Clips (drive 0046, clip 050, 4 frames at 1 fps)
 
-### Baseline iDisc (AFP only, no SAM3)
+### Baseline iDisc (AFP, no SAM3)
 
 ![Baseline IDRs](gifs/baseline_idrs.gif)
 
-ResNet-101 AFP features with hard IDR assignment. Note the flickering IDR indices across frames — the representation is not temporally stable.
+ResNet-101 AFP features with hard IDR assignment (32 latents). This is the reference depth (abs_rel ~0.060).
 
-### SAM3 Image Encoder — Translate Mode
+### SAM3 image encoder (replace mode)
 
-![SAM3 translate, image mode](gifs/translate_picture.gif)
+![SAM3 image, replace](gifs/sam3_image_replace.gif)
 
-SAM3 queries injected via `Sam3QueryToIDR` cross-attention. IDR maps are more spatially coherent than the baseline but still change frame-to-frame since each frame is encoded independently.
+Frozen SAM3 image encoder; the 200 decoder queries go into IDRs via `sam3_proj`. IDR maps
+are more fragmented (200 slots vs 32), but depth is worse than baseline (abs_rel 0.084).
 
-### SAM3 Video Encoder — Translate Mode
+### SAM3 video encoder (replace mode)
 
-![SAM3 translate, video mode](gifs/translate_video.gif)
+![SAM3 video, replace](gifs/sam3_video_replace.gif)
 
-The full clip is processed through the SAM3 video encoder backbone, with per-frame FPN features dispatched to iDisc. IDR structure is visibly different from image mode. Depth quality is degraded (abs_rel ~0.22).
-
-### SAM3 Video Masklets — Translate Mode
-
-![SAM3 masklets, video mode](gifs/masklets_translate_video.gif)
-
-Masklet ID assignment from `Sam3VideoPixelEncoder`. IDs are locked from frame 0 and propagated via the tracker, producing temporally consistent segmentation across the clip.
+Whole clip through the SAM3 video backbone once, per-frame FPN and queries to iDisc. IDR
+structure differs from image mode, depth scale less calibrated (abs_rel 0.103).
 
 ---
 
-## Detailed Clip Comparisons
+## Detailed clip comparisons
 
-### Sequence IDR Maps (`viz_seq`) — Image Encoder
+### IDR maps, image encoders (`viz_seq`)
 
-Comparison of IDR maps across SAM modes using the image encoder (per-frame inference):
+Per-frame inference. Layout per frame: `[RGB | Depth pred | GT depth]` /
+`[ISD IDR res1 | res2 | res3]`.
 
-| Mode | Clip 050 | Clip 051 |
-|------|----------|----------|
-| `none` (AFP) | ![](gifs/viz_seq/clip_050_2011_09_26_2011_09_26_drive_0046_sync_none_hard.gif) | ![](gifs/viz_seq/clip_051_2011_09_26_2011_09_26_drive_0046_sync_none_hard.gif) |
-| `replace` | ![](gifs/viz_seq/clip_050_2011_09_26_2011_09_26_drive_0046_sync_replace_hard.gif) | ![](gifs/viz_seq/clip_051_2011_09_26_2011_09_26_drive_0046_sync_replace_hard.gif) |
-| `translate` | ![](gifs/viz_seq/clip_050_2011_09_26_2011_09_26_drive_0046_sync_translate_hard.gif) | ![](gifs/viz_seq/clip_051_2011_09_26_2011_09_26_drive_0046_sync_translate_hard.gif) |
+| Model | Clip 050 | Clip 051 | Clip 052 |
+|------|----------|----------|----------|
+| baseline iDisc (AFP) | ![](gifs/viz_seq/clip_050_baseline_image.gif) | ![](gifs/viz_seq/clip_051_baseline_image.gif) | ![](gifs/viz_seq/clip_052_baseline_image.gif) |
+| SAM3 image (`replace`) | ![](gifs/viz_seq/clip_050_sam3_image.gif) | ![](gifs/viz_seq/clip_051_sam3_image.gif) | ![](gifs/viz_seq/clip_052_sam3_image.gif) |
 
-**Layout per frame:** `[RGB | Depth pred | GT depth] / [ISD res1 | ISD res2 | ISD res3]`
+### IDR maps, video encoders (`viz_seq_video`)
 
-### Sequence IDR Maps (`viz_seq_video`) — Video Encoder
+Same layout, but the clip goes through the (ResNet sequence / SAM3 video) backbone.
 
-Same layout but the clip goes through the video encoder backbone once:
+| Model | Clip 050 | Clip 051 | Clip 052 |
+|------|----------|----------|----------|
+| baseline iDisc (AFP) | ![](gifs/viz_seq_video/clip_050_baseline_video.gif) | ![](gifs/viz_seq_video/clip_051_baseline_video.gif) | ![](gifs/viz_seq_video/clip_052_baseline_video.gif) |
+| SAM3 video (`replace`) | ![](gifs/viz_seq_video/clip_050_sam3_video.gif) | ![](gifs/viz_seq_video/clip_051_sam3_video.gif) | ![](gifs/viz_seq_video/clip_052_sam3_video.gif) |
 
-| Mode | Clip 050 | Clip 051 |
-|------|----------|----------|
-| `replace` | ![](gifs/viz_seq_video/clip_050_2011_09_26_2011_09_26_drive_0046_sync_replace_hard.gif) | ![](gifs/viz_seq_video/clip_051_2011_09_26_2011_09_26_drive_0046_sync_replace_hard.gif) |
-| `translate` | ![](gifs/viz_seq_video/clip_050_2011_09_26_2011_09_26_drive_0046_sync_translate_hard.gif) | ![](gifs/viz_seq_video/clip_051_2011_09_26_2011_09_26_drive_0046_sync_translate_hard.gif) |
+### SAM3 image-encoder masks (`viz_sam3`)
 
-### SAM3 Image Encoder Masks (`viz_sam3`)
+Per-frame SAM3 segmentation slot assignment and top-K mask overlays for
+`finetune-sam3-image`. Layout: `[RGB | SAM3 slot assignment | top-K overlay]` /
+`[slot 0 | slot 1 | ...]`.
 
-Per-frame SAM3 segmentation slot assignment and top-K mask overlays:
+| Clip 050 | Clip 051 | Clip 052 |
+|----------|----------|----------|
+| ![](gifs/viz_sam3/clip_050_sam3.gif) | ![](gifs/viz_sam3/clip_051_sam3.gif) | ![](gifs/viz_sam3/clip_052_sam3.gif) |
 
-| Clip 050 | Clip 051 |
-|----------|----------|
-| ![](gifs/viz_sam3/clip_050_2011_09_26_2011_09_26_drive_0046_sync_translate.gif) | ![](gifs/viz_sam3/clip_051_2011_09_26_2011_09_26_drive_0046_sync_translate.gif) |
+### Video masklets (`viz_masklets`)
 
-**Layout:** `[RGB | SAM3 slot assignment | top-K overlay] / [slot 0 | slot 1 | ...]`
+SAM3 video tracker masklets for `finetune-sam3-video`, rendered at detection threshold 0.0.
+Layout: `[RGB | Masklet ID assignment | top-K
+overlay]` / `[ISD IDR res1 | res2 | res3]` / `[masklet 0..N]`.
 
-### Video Masklets (`viz_masklets`)
+| Clip 050 | Clip 051 | Clip 052 |
+|----------|----------|----------|
+| ![](gifs/viz_masklets/clip_050_sam3_video.gif) | ![](gifs/viz_masklets/clip_051_sam3_video.gif) | ![](gifs/viz_masklets/clip_052_sam3_video.gif) |
 
-Temporally consistent masklet tracking from `Sam3VideoPixelEncoder`:
+### Attention grids (`visualize_experiments.py`)
 
-| Mode | Clip 050 | Clip 051 |
-|------|----------|----------|
-| `replace` | ![](gifs/viz_masklets/clip_050_2011_09_26_2011_09_26_drive_0046_sync_replace.gif) | ![](gifs/viz_masklets/clip_051_2011_09_26_2011_09_26_drive_0046_sync_replace.gif) |
-| `translate` | ![](gifs/viz_masklets/clip_050_2011_09_26_2011_09_26_drive_0046_sync_translate.gif) | ![](gifs/viz_masklets/clip_051_2011_09_26_2011_09_26_drive_0046_sync_translate.gif) |
+Per-IDR attention on a single frame (clip 050). For the AFP baseline each panel shows where
+one of the 32 latents attends. SAM3 `replace` bypasses AFP, so there only the ISD
+dominant-IDR map is available (the same view as `viz_seq`).
 
-**Layout:** `[RGB | Masklet ID assignment | top-K overlay] / [ISD res1 | ISD res2 | ISD res3] / [Masklet 0..N]`
+Baseline, AFP latent attention (res 1, 32 latents):
+
+![baseline AFP attention](gifs/attn/baseline_afp_res1.png)
+
+SAM3 image, ISD dominant-IDR per pixel (res 2):
+
+![SAM3 ISD assignment](gifs/attn/sam3_isd_res2.png)
 
 ---
 
 ## Reproduction
 
-There are three visualization scripts in `scripts/utils/`. All require a config file, a model checkpoint, and the KITTI base path.
-
-### Cluster paths
-
-```
-BASE_PATH   = /work/courses/3dv/team17/idisc
-MODEL_R101  = /work/courses/3dv/team17/models/kitti_resnet101.pt
-E12_CKPT    = /work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam_finetuned.pt
-E15_CKPT    = /work/courses/3dv/team17/models/models_tkwiecinski/E15-online-sam3-video-translate/best_sam_finetuned.pt
-E20_CKPT    = /work/courses/3dv/team17/models/models_tkwiecinski/E20-sam3-pure-multiclass/best_sam_finetuned.pt
+```bash
+sbatch scripts/utils/visualize_all.sh        # writes GIFs under output/runs/viz/*
 ```
 
-### 1. `visualize_sequence.py` — IDR attention over clips
+### Checkpoints and configs
 
-Renders depth prediction, GT depth, and ISD dominant-IDR maps across 3 FPN resolutions. Works with both image and video encoder configs.
+Each script takes a checkpoint (`best_sam_finetuned.pt`) and that run's resolved Hydra
+config (`resolved_config.yaml`):
+
+```
+BASE_PATH        = /work/courses/3dv/team17/idisc
+baseline image   = /work/courses/3dv/team17/results/models/finetune-idisc-image/best_sam_finetuned.pt
+                   /work/courses/3dv/team17/results/runs/2026-05-28_18-22-11_finetune-idisc-image_7d21415/resolved_config.yaml
+baseline video   = /work/courses/3dv/team17/results/models/finetune-idisc-video/best_sam_finetuned.pt
+                   /work/courses/3dv/team17/results/runs/2026-05-28_16-03-16_finetune-idisc-video_7d21415/resolved_config.yaml
+SAM3 image       = /work/courses/3dv/team17/results/models/finetune-sam3-image/best_sam_finetuned.pt
+                   /work/courses/3dv/team17/results/runs/2026-05-28_08-37-35_finetune-sam3-image_c608a2d/resolved_config.yaml
+SAM3 video       = /work/courses/3dv/team17/results/models/finetune-sam3-video/best_sam_finetuned.pt
+                   /work/courses/3dv/team17/results/runs/2026-05-28_10-37-58_finetune-sam3-video_c608a2d/resolved_config.yaml
+```
+
+### Individual scripts
+
+`--config-file` takes a resolved Hydra config, the `resolved_config.yaml` that
+`scripts/run_with_hydra.py` writes into each `output/runs/<run>/`. Pick a run whose encoder
+matches what you want to visualize. `--sam-mode` accepts `replace` or `translate` (the
+AFP-only baseline ignores it and shows AFP IDRs).
 
 ```bash
+# IDR maps over a clip (depth + ISD dominant-IDR per FPN resolution)
 python scripts/utils/visualize_sequence.py \
-  --config-file <config.json> \
-  --model-file  <checkpoint.pt> \
-  --base-path   $BASE_PATH \
-  --output-dir  outputs/runs/viz_seq \
-  --sam-mode    <replace|translate> \
-  --start-clip  50 --num-clips 2 --clip-length 4 --fps 1
-```
+  --config-file <run>/resolved_config.yaml --model-file <ckpt.pt> \
+  --base-path /work/courses/3dv/team17/idisc \
+  --output-dir output/runs/viz/seq --sam-mode replace \
+  --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
-Use `--soft-assignment` for weighted-average IDR index (continuous colormap) instead of hard argmax, but I didn't really used that.
-
-Example configs:
-- Image encoder: `configs/kitti/kitti_sam3_translate.json`, `configs/kitti/kitti_sam3.json`
-- Video encoder: `configs/kitti/kitti_sam3_video.json`
-
-`--sam-mode` accepts `replace` or `translate` only; the AFP-only (`none`) baseline path is no longer exposed by these scripts.
-
-### 2. `visualize_sam3.py` — SAM3 image encoder masks
-
-Shows per-frame SAM3 segmentation slot assignments and top-K mask overlays. Requires a SAM3 image encoder config.
-
-```bash
+# SAM3 image-encoder slot assignments + top-K mask overlays (SAM3 image config)
 python scripts/utils/visualize_sam3.py \
-  --config-file configs/kitti/kitti_sam3_translate.json \
-  --model-file  <checkpoint.pt> \
-  --base-path   $BASE_PATH \
-  --output-dir  outputs/runs/viz_sam3 \
-  --sam-mode translate \
-  --start-clip 50 --num-clips 2 --clip-length 4 --fps 1
-```
+  --config-file <sam3-image-run>/resolved_config.yaml --model-file <ckpt.pt> \
+  --base-path /work/courses/3dv/team17/idisc \
+  --output-dir output/runs/viz/sam3_masks --sam-mode replace \
+  --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
-### 3. `visualize_sam3_masklets.py` — Video encoder masklets
-
-Uses `Sam3VideoPixelEncoder` for temporally consistent object tracking. Requires a video encoder config (`kitti_sam3_video.json`).
-
-```bash
+# SAM3 video tracker masklets (SAM3 video config). --det-thresh 0.0 keeps all detections
 python scripts/utils/visualize_sam3_masklets.py \
-  --config-file configs/kitti/kitti_sam3_video.json \
-  --model-file  <checkpoint.pt> \
-  --base-path   $BASE_PATH \
-  --output-dir  outputs/runs/viz_masklets \
-  --sam-mode    <replace|translate> \
-  --start-clip  50 --num-clips 2 --clip-length 4 \
-  --num-masklets 9 --fps 1
+  --config-file <sam3-video-run>/resolved_config.yaml --model-file <ckpt.pt> \
+  --base-path /work/courses/3dv/team17/idisc \
+  --output-dir output/runs/viz/masklets --sam-mode replace \
+  --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9 --det-thresh 0.0
+
+# Per-IDR attention grids on a single frame (AFP baseline / SAM3 image config)
+python scripts/utils/visualize_experiments.py \
+  --config-file <run>/resolved_config.yaml --model-file <ckpt.pt> \
+  --base-path /work/courses/3dv/team17/idisc \
+  --output-dir output/runs/viz/attn --sam-mode replace \
+  --start-clip 50 --num-clips 1 --clip-length 4
 ```
 
 ### Common flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--sam-mode` | `replace` | `replace` SAM3 linear proj, `translate` Sam3QueryToIDR cross-attention |
-| `--soft-assignment` | off | Weighted-average IDR index instead of hard argmax (only `visualize_sequence.py`) (note: I didn't really used that) |
-| `--num-masklets` | 6 | Number of top-scoring masklets to display (only `visualize_sam3_masklets.py`) |
+| `--sam-mode` | `replace` | `replace` uses the SAM3 linear projection, `translate` uses the Sam3QueryToIDR cross-attention |
+| `--soft-assignment` | off | Weighted-average IDR index instead of hard argmax (`visualize_sequence.py` only) |
 | `--clip-length` | from config | Frames per clip |
 | `--start-clip` | 0 | Dataset clip index to start from |
 | `--num-clips` | 3 | Number of clips to visualize |
+| `--num-masklets` | 6 | Top-scoring masklets to show (`visualize_sam3_masklets.py` only) |
+| `--det-thresh` | from config | Tracker detection threshold (`visualize_sam3_masklets.py`); 0.0 keeps all |
 | `--format` | `gif` | Output format: `gif` or `mp4` (mp4 needs ffmpeg) |
 | `--fps` | 2 | Animation frame rate |
-
----
-
-## Quick Reproduce
-
-Paste-ready commands that reproduce all GIFs in `gifs/`. Run from the repo root.
-
-```bash
-BP=/work/courses/3dv/team17/idisc
-E12=/work/courses/3dv/team17/sam3_checkpoints/E12-online-sam3-translate/best_sam_finetuned.pt
-E20=/work/courses/3dv/team17/models/models_tkwiecinski/E20-sam3-pure-multiclass/best_sam_finetuned.pt
-R101=/work/courses/3dv/team17/models/kitti_resnet101.pt
-
-# --- viz_seq: image encoder IDR maps (replace / translate) ---
-python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3.json           --model-file $E20  --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3_translate.json --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_seq       --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-
-# --- viz_seq_video: video encoder IDR maps (replace / translate) ---
-python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E20  --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-python scripts/utils/visualize_sequence.py --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_seq_video --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-
-# --- viz_sam3: image encoder SAM3 masks ---
-python scripts/utils/visualize_sam3.py     --config-file configs/kitti/kitti_sam3_video.json     --model-file $E12  --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_sam3      --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
-
-# --- viz_masklets: video encoder masklet tracking (replace / translate) ---
-python scripts/utils/visualize_sam3_masklets.py --config-file configs/kitti/kitti_sam3_video.json              --model-file $E20 --base-path $BP --sam-mode replace   --output-dir outputs/runs/viz_masklets --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9
-python scripts/utils/visualize_sam3_masklets.py --config-file configs/kitti/kitti_sam3_translate_sequence.json  --model-file $E12 --base-path $BP --sam-mode translate --output-dir outputs/runs/viz_masklets --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9
-```

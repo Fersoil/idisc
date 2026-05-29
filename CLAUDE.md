@@ -31,16 +31,6 @@ step (pure Python); `idisc/models/ops/` is a prebuilt CUDA deformable-attention 
 # Local run (no SLURM). paths=local; note sam_checkpoint is null locally, so SAM3
 # experiments need the cluster — only the ResNet baseline runs locally.
 PYTHONPATH=. python scripts/run_with_hydra.py experiment=eval_idisc_image paths=local
-
-# Format + sort imports (black + isort over idisc/ and scripts/)
-bash scripts/utils/lint.sh
-
-# Tests (pytest is a dependency; tests are ad hoc, run a file directly)
-pytest <path>           # whole file
-pytest <path>::<test>   # single test
-
-# Regenerate visualization GIFs (one GPU)
-sbatch scripts/utils/visualize_all.sh
 ```
 
 Live experiment keys: `eval_idisc_image`, `eval_idisc_video`, `finetune_idisc_image`,
@@ -84,16 +74,6 @@ Encoders share one `forward` path via the duck-typed `yields_instance_queries` f
 it copies the config before writing derived values (e.g. `embed_dims`) back for the
 sub-builders, so the caller's config is never mutated.
 
-**Weight save/load** is asymmetric and worth understanding before touching it
-(`scripts/train.py`, `idisc/models/idisc.py`):
-- Save (`_trainable_state_dict`): drops everything under `pixel_encoder.sam_model.` /
-  `video_model.` — the frozen SAM3 backbone is rebuilt from `sam_checkpoint` at construction,
-  so persisting it would bloat checkpoints ~16x.
-- Load (`load_pretrained`, `strict=False`): missing frozen-backbone keys are expected and
-  silent; missing **non-backbone** keys mean a *trainable* param was left at random init and
-  are warned about, grouped per module. That warning is the main guard that loaded weights
-  actually match the model — keep it meaningful.
-
 ## Coding guidelines
 
 The bar is **readable without docs**, not heavily documented. We do not enforce strict
@@ -115,13 +95,3 @@ linting or docstring coverage; we do care about the following:
 - **Keep invariants at the boundary.** New rules about valid config combinations belong in
   `config_bridge._validate`, validated once up front, not as defensive checks deep in the
   model.
-
-## Gotchas
-
-- `import sam3` resolves from an **installed venv package** (pinned in
-  `requirements.txt` to the upstream repo), not from a `sam3/` source dir on `PYTHONPATH`.
-  A fresh environment needs `pip install -r requirements.txt`; only the repo root needs to
-  be on `PYTHONPATH` (for `idisc`/`scripts`).
-- `paths=cluster` is the default; switch to `paths=local` off the cluster.
-- `scripts/` root accumulates throwaway diagnostic scripts (`test_*.py`, `*.sh`) that are not
-  committed — `scripts/experiments/` and `scripts/utils/` are the real homes.

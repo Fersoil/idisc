@@ -73,7 +73,9 @@ else
   source /work/courses/3dv/team17/idisc/.venv/bin/activate
 fi
 export CUDA_HOME=\$(dirname \"\$(dirname \"\$(which nvcc)\")\")
-export PYTHONPATH='${IDISC_REPO}:${IDISC_REPO}/sam3:\${PYTHONPATH:-}'
+# sam3 is an installed venv package (see requirements.txt), not a source dir on
+# the path; PYTHONPATH only needs the repo root for the idisc/scripts imports.
+export PYTHONPATH='${IDISC_REPO}:\${PYTHONPATH:-}'
 cd '${IDISC_REPO}'
 ${INNER_CMD}"
 

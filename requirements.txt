@@ -9,8 +9,11 @@ tqdm
 wheel
 scipy
 
-# SAM3 
-sam3
+# SAM3 — Meta's Segment Anything 3, used as the frozen pixel encoder.
+# Installed as a regular package (imported via `import sam3`, NOT a PYTHONPATH
+# dir). Pinned to the upstream repo so a fresh venv resolves the right package
+# (a bare `sam3` would pull an unrelated project from PyPI).
+sam3 @ git+https://github.com/facebookresearch/sam3.git
 opencv-python>=4.8,<4.10
 numpy>=1.26,<2
 pycocotools

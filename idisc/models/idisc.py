@@ -10,6 +10,7 @@ Top-level `IDisc` model. Composes pixel_encoder → pixel_decoder → AFP/IDR �
 `IDisc.build(config)` is the canonical constructor — do not call __init__ directly.
 """
 
+import warnings
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
 
@@ -170,7 +171,38 @@ class IDisc(nn.Module):
         new_state_dict = deepcopy(
             {k.replace("module.", ""): v for k, v in dict_model.items()}
         )
-        self.load_state_dict(new_state_dict, strict=False)
+        # strict=False is intentional: the frozen SAM3 backbone is rebuilt from
+        # sam_checkpoint at construction, so its keys are never in a head
+        # checkpoint and show up as (expected) missing keys. We warn about the
+        # two cases that actually signal a mismatch.
+        info = self.load_state_dict(new_state_dict, strict=False)
+        if info.unexpected_keys:
+            # Checkpoint weights with no home in this model — a red flag
+            # (architecture/checkpoint drift), so list them in full.
+            warnings.warn(
+                f"load_pretrained({model_file}): {len(info.unexpected_keys)} "
+                f"unexpected key(s) ignored: {info.unexpected_keys}",
+                stacklevel=2,
+            )
+
+        frozen_prefixes = ("pixel_encoder.sam_model.", "pixel_encoder.video_model.")
+        head_missing = [k for k in info.missing_keys
+                        if not k.startswith(frozen_prefixes)]
+        if head_missing:
+            # A non-backbone missing key is a trainable param left at random init.
+            # Group by top-level module so e.g. unused sam3_proj in the baseline
+            # is distinguishable from a genuinely dropped pixel_decoder/isd weight.
+            by_module: Dict[str, int] = {}
+            for k in head_missing:
+                top = k.split(".", 1)[0]
+                by_module[top] = by_module.get(top, 0) + 1
+            summary = ", ".join(f"{m}: {n}" for m, n in sorted(by_module.items()))
+            warnings.warn(
+                f"load_pretrained({model_file}): {len(head_missing)} non-backbone "
+                f"key(s) left at init (per module: {summary}). These are trainable "
+                f"params the checkpoint did not provide — confirm this is intended.",
+                stacklevel=2,
+            )
 
     @property
     def device(self):
@@ -178,6 +210,11 @@ class IDisc(nn.Module):
 
     @classmethod
     def build(cls, config: Dict[str, Dict[str, Any]]):
+        # Copy-on-write: build() writes derived values (e.g. embed_dims) back into
+        # the config so the sub-builders below can read them, but the caller's
+        # config is the resolved source-of-truth that gets snapshotted — do not
+        # mutate it.
+        config = deepcopy(config)
         pixel_encoder_img_size = config["model"]["pixel_encoder"]["img_size"]
         pixel_encoder_pretrained = config["model"]["pixel_encoder"].get(
             "pretrained", None

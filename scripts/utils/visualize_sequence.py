@@ -201,8 +201,13 @@ def run_sequence_visualization(cfg: dict) -> None:
     model = model.to(device).eval()
     print(f"Model loaded — {num_heads} heads, {model.afp.num_resolutions} AFP resolutions")
 
-    model_tag = f"{Path(cfg['config_file']).stem}  sam_mode={sam_mode}"
-    isd_label = ISD_LABELS.get(sam_mode, "IDR assignment")
+    run_name = config.get("run", {}).get("name") or Path(cfg["config_file"]).stem
+    idr_source = config.get("method", {}).get("idr_source")
+    model_tag = f"{run_name}  sam_mode={sam_mode}"
+    if idr_source == "afp":
+        isd_label = "AFP IDR assignment"
+    else:
+        isd_label = ISD_LABELS.get(sam_mode, "IDR assignment")
 
     clip_length = cfg.get("clip_length") or config["data"].get("clip_length", 4)
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])

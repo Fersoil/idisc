@@ -50,14 +50,14 @@ class Sam3Capture:
         orig_fg = sam_model.forward_grounding
 
         def _patched_fg(*args, **kwargs):
-            out, hs = orig_fg(*args, **kwargs)
+            out = orig_fg(*args, **kwargs)
             entry = {}
             if "pred_masks" in out:
                 entry["masks"] = out["pred_masks"][0].detach().cpu().float()
             if "pred_logits" in out:
                 entry["logits"] = out["pred_logits"][0].detach().cpu().float()
             self._queue.append(entry)
-            return out, hs
+            return out
 
         sam_model.forward_grounding = _patched_fg
         self._sam_model = sam_model
@@ -262,7 +262,8 @@ def run(cfg):
     fmt = cfg.get("format", "gif")
     clip_length = cfg.get("clip_length") or config["data"].get("clip_length", 4)
     sam_mode = cfg.get("sam_mode") or "replace"
-    model_tag = f"{Path(cfg['config_file']).stem}  sam_mode={sam_mode}"
+    run_name = config.get("run", {}).get("name") or Path(cfg["config_file"]).stem
+    model_tag = f"{run_name}  sam_mode={sam_mode}"
 
     model = IDisc.build(config)
     model.load_pretrained(cfg["model_file"])

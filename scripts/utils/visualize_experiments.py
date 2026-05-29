@@ -1,10 +1,14 @@
 #!/usr/bin/env python
-"""Visualize IDR attention maps from AFP and ISD cross-attention layers.
+"""Per-IDR attention grids from the AFP and ISD cross-attention layers.
 
-Hooks each AttentionLayer's dropout sub-module to capture the attention matrix
-(B*H, N, K) without touching model code; a pre-hook on AFP captures the
-spatial shapes needed to reshape K → H_feat × W_feat. Per-sample PNG grids
-are saved to --output-dir.
+Runs on a single frame (frame 0 of each clip in the sequence manifest) and, for each
+FPN resolution, saves: an AFP grid showing where every IDR latent attends, and an ISD
+dominant-IDR-per-pixel map. Hooks each AttentionLayer's dropout sub-module to capture
+the (B*H, N, K) attention matrix without touching model code. PNGs go to --output-dir.
+
+Note: in `replace` mode the AFP is bypassed, so AFP grids only appear for the AFP
+baseline; SAM3 models still yield the ISD map. The video encoder is not supported here
+(use visualize_sequence.py).
 """
 
 import argparse
@@ -18,7 +22,6 @@ import torch
 import torch.cuda as tcuda
 import torch.nn.functional as F
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, SequentialSampler
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _viz_common import (
@@ -29,7 +32,7 @@ from _viz_common import (
     to_spatial,
 )
 
-import idisc.dataloders as custom_dataset
+from idisc.dataloders.kitti_sequence import KITTISequenceDataset
 from idisc.models.idisc import IDisc
 
 
@@ -108,68 +111,87 @@ def run_visualization(cfg: dict) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda") if tcuda.is_available() else torch.device("cpu")
     num_heads = config["model"]["num_heads"]
-    num_samples = cfg.get("num_samples", 8)
+    num_clips = cfg.get("num_clips", 3)
+    start_clip = cfg.get("start_clip", 0)
     sam_mode = cfg.get("sam_mode") or "replace"
+    run_name = config.get("run", {}).get("name") or Path(cfg["config_file"]).stem
 
     model = IDisc.build(config)
     model.load_pretrained(cfg["model_file"])
     model = model.to(device).eval()
-    print(f"Model loaded — {num_heads} heads, {model.afp.num_resolutions} AFP resolutions")
-    print(f"sam_mode: {sam_mode}")
-
+    if getattr(model.pixel_encoder, "is_video_encoder", False):
+        raise RuntimeError(
+            "This script is single-frame; the SAM3 video encoder needs a clip. "
+            "Use visualize_sequence.py / visualize_sam3_masklets.py for the video model."
+        )
     yields_iq = getattr(model.pixel_encoder, "yields_instance_queries", False)
+    print(f"Model loaded ({run_name}) — {num_heads} heads, "
+          f"{model.afp.num_resolutions} AFP resolutions, sam_mode={sam_mode}")
+    if sam_mode == "replace" and yields_iq:
+        print("note: replace mode bypasses AFP, so only ISD attention is captured "
+              "(AFP grids appear for the AFP baseline only).")
+
+    # Single frame per clip, drawn from the same sequence manifest the other
+    # viz scripts use, so this runs against the current resolved configs.
+    clip_length = cfg.get("clip_length") or config["data"].get("clip_length", 4)
+    manifest = (cfg.get("manifest_path") or
+                config["data"].get("manifest_path", "splits/kitti/sequence_manifest.json"))
     data_path = os.path.join(cfg["base_path"], config["data"]["data_root"])
-    dataset = getattr(custom_dataset, config["data"]["val_dataset"])(
-        test_mode=True, base_path=data_path, crop=config["data"]["crop"],
+    dataset = KITTISequenceDataset(
+        test_mode=True, base_path=data_path,
+        manifest_path=os.path.join(cfg["base_path"], manifest),
+        clip_length=clip_length, crop=config["data"]["crop"],
     )
-    loader = DataLoader(
-        dataset, batch_size=1, sampler=SequentialSampler(dataset),
-        num_workers=2, pin_memory=True, drop_last=False,
-    )
-    print(f"{len(dataset)} samples — visualizing first {num_samples}")
+    if start_clip >= len(dataset):
+        raise ValueError(f"--start-clip {start_clip} >= dataset size {len(dataset)}")
+    end_clip = min(start_clip + num_clips, len(dataset))
+    print(f"{len(dataset)} clips — frame 0 of clips {start_clip}..{end_clip - 1}")
 
     capture = AttentionCapture(model)
     with torch.no_grad():
-        for i, batch in enumerate(loader):
-            if i >= num_samples:
-                break
-            data = batch["image"].to(device)
-            gt = batch["gt"].to(device)
-            mask = batch["mask"].to(device)
+        for clip_idx in range(start_clip, end_clip):
+            clip = dataset[clip_idx]
+            image = clip["images"][0:1].to(device)
+            gt = clip["depths"][0:1].to(device)
+            mask = clip["masks"][0:1].to(device)
+            seq_id = clip["sequence_id"].replace("/", "_")
             capture.reset()
 
             # For SAM3 encoders, run the backbone once and pass pre-extracted
             # outputs to avoid a second backbone call inside model().
             if yields_iq:
-                enc_out = model.pixel_encoder(data)
-                *fpn, instance_queries = enc_out
+                *fpn, instance_queries = model.pixel_encoder(image)
                 pre_extracted = model.invert_encoder_output_order(tuple(fpn))
             else:
                 instance_queries = None
                 pre_extracted = None
 
-            model(data,
+            model(image,
                   instance_queries=instance_queries,
                   sam_mode=sam_mode,
                   pre_extracted_encoder_outputs=pre_extracted,
                   gt=gt, mask=mask)
 
-            visualize_sample(image=data, capture=capture, num_heads=num_heads,
-                             sample_idx=0, output_dir=output_dir,
-                             tag=f"sample_{i:04d}")
+            tag = f"clip_{clip_idx:03d}_{seq_id}"
+            visualize_sample(image=image, capture=capture, num_heads=num_heads,
+                             sample_idx=0, output_dir=output_dir, tag=tag)
 
     capture.remove()
-    print(f"\nDone — {min(num_samples, len(dataset))} samples → {output_dir}")
+    print(f"\nDone → {output_dir}")
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Visualize IDR attention maps")
+    p = argparse.ArgumentParser(
+        description="Per-IDR attention grids (AFP) + ISD dominant-IDR maps, single frame.")
     p.add_argument("--config-file", required=True,
                    help="Resolved Hydra config (resolved_config.yaml from a run dir).")
     p.add_argument("--model-file", required=True)
     p.add_argument("--base-path", required=True)
-    p.add_argument("--output-dir", default="viz_results")
-    p.add_argument("--num-samples", type=int, default=8)
+    p.add_argument("--output-dir", default="viz_attn")
+    p.add_argument("--manifest-path", default=None)
+    p.add_argument("--num-clips", type=int, default=3)
+    p.add_argument("--start-clip", type=int, default=0)
+    p.add_argument("--clip-length", type=int, default=None)
     p.add_argument("--sam-mode", default="replace", choices=SAM_MODE_CHOICES)
     return p.parse_args()
 
@@ -181,7 +203,10 @@ def main() -> None:
         "model_file": args.model_file,
         "base_path": args.base_path,
         "output_dir": args.output_dir,
-        "num_samples": args.num_samples,
+        "manifest_path": args.manifest_path,
+        "num_clips": args.num_clips,
+        "start_clip": args.start_clip,
+        "clip_length": args.clip_length,
         "sam_mode": args.sam_mode,
     })
 

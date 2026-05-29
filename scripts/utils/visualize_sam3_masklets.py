@@ -287,7 +287,8 @@ def run(cfg):
     fmt = cfg.get("format", "gif")
     clip_length = cfg.get("clip_length") or config["data"].get("clip_length", 4)
     sam_mode = cfg.get("sam_mode") or "replace"
-    model_tag = f"{Path(cfg['config_file']).stem}  masklets  sam_mode={sam_mode}"
+    run_name = config.get("run", {}).get("name") or Path(cfg["config_file"]).stem
+    model_tag = f"{run_name}  masklets  sam_mode={sam_mode}"
 
     global TOP_K_MASKLETS
     TOP_K_MASKLETS = cfg.get("num_masklets", TOP_K_MASKLETS)
@@ -301,6 +302,12 @@ def run(cfg):
             "This script requires Sam3VideoPixelEncoder (is_video_encoder=True). "
             "Use a config with pixel_encoder.name=sam3_video."
         )
+
+    det_thresh = cfg.get("det_thresh")
+    if det_thresh is not None:
+        model.pixel_encoder.video_model.new_det_thresh = det_thresh
+        model.pixel_encoder.video_model.score_threshold_detection = det_thresh
+        print(f"detection threshold set to {det_thresh}")
 
     capture = AttentionCapture(model)
     manifest = cfg.get("manifest_path") or config["data"].get(
@@ -362,6 +369,10 @@ def _parse_args():
     p.add_argument("--clip-length", type=int, default=None)
     p.add_argument("--num-masklets", type=int, default=6,
                    help="How many top-scoring masklets to show per frame.")
+    p.add_argument("--det-thresh", type=float, default=None,
+                   help="Override the tracker detection threshold "
+                        "(new_det_thresh / score_threshold_detection). Use 0.0 to keep "
+                        "all detections; the trained 0.3 confirms none on KITTI clips.")
     p.add_argument("--sam-mode", default="replace", choices=SAM_MODE_CHOICES,
                    help="IDR source for the depth head.")
     p.add_argument("--fps", type=int, default=3)
@@ -381,6 +392,7 @@ def main():
         "start_clip": args.start_clip,
         "clip_length": args.clip_length,
         "num_masklets": args.num_masklets,
+        "det_thresh": args.det_thresh,
         "sam_mode": args.sam_mode,
         "fps": args.fps,
         "format": args.format,

@@ -1,5 +1,6 @@
 n_iters: 5000
 lr: 5.0e-5
+sam3_lr: 1.0e-5   # LR for unfrozen SAM3 parts (sam3_trainable)
 batch_size: 2
 val_interval: 500
 output_dir: output/models/${run.exp_id}

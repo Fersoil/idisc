@@ -28,6 +28,7 @@ model:
     depths: 6
     hidden_dim: 256
     anchor_points: 8
+    grad_checkpoint: true
   pixel_encoder:
     img_size: [1216, 352]
     name: sam3_image
@@ -38,9 +39,12 @@ model:
     use_presence_score: true
     top_k_queries: 200
     confidence_threshold: 0.0
-    # prompt_mode / prompt_classes injected from method.prompt by config_bridge
+    pixel_source: msda          # msda | sam3_memory | backbone_fpn
+    sam3_trainable: []          # subset of [neck, encoder, decoder]; [] = frozen
   afp:
     context_low_resolutions_skip: 1
     depths: 2
-    latent_dim: 128
+    latent_dim: 256
     num_latents: 32
+  context_adapter:
+    depth: 2

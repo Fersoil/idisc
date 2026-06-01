@@ -3,6 +3,7 @@ from typing import Callable, List, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
 IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
@@ -37,6 +38,39 @@ def target_level_sizes(hw: Tuple[int, int], n_levels: int) -> List[Tuple[int, in
     ]
 
 
+def letterbox_to_square(
+    img: torch.Tensor, size: int = 1008, pad_value: int = 128
+) -> torch.Tensor:
+    """Aspect-preserving resize of a (C, H, W) uint8 image into a size x size
+    square (scale long side to `size`, pad the short side), avoiding the
+    processor's anisotropic squish. pad_value=128 maps to ~0 after normalisation."""
+    c, h, w = img.shape
+    scale = size / max(h, w)
+    new_h, new_w = max(1, round(h * scale)), max(1, round(w * scale))
+    resized = F.interpolate(
+        img.unsqueeze(0).float(), size=(new_h, new_w),
+        mode="bilinear", align_corners=False,
+    ).squeeze(0)
+    out = torch.full((c, size, size), float(pad_value),
+                     device=img.device, dtype=torch.float32)
+    top, left = (size - new_h) // 2, (size - new_w) // 2
+    out[:, top:top + new_h, left:left + new_w] = resized
+    return out.clamp(0, 255).to(torch.uint8)
+
+
+def letterbox_geometry(
+    hw: Tuple[int, int], size: int = 1008
+) -> Tuple[float, float, float, float]:
+    """Inverse of letterbox_to_square: (frac_top, frac_left, frac_h, frac_w) of
+    the square occupied by real content for an image of shape `hw`. Resolution-
+    independent, so it applies to any downstream feature/prediction map."""
+    h, w = int(hw[0]), int(hw[1])
+    scale = size / max(h, w)
+    new_h, new_w = max(1, round(h * scale)), max(1, round(w * scale))
+    top, left = (size - new_h) // 2, (size - new_w) // 2
+    return (top / size, left / size, new_h / size, new_w / size)
+
+
 def infer_num_levels(backbone) -> int:
     """FPN level count = neck convs minus the SAM3 `scalp` (discarded top levels)."""
     convs = backbone.vision_backbone.convs
@@ -59,3 +93,15 @@ def install_decoder_hook(decoder, sink: Callable[[torch.Tensor], None]):
                 return
 
     return decoder.register_forward_hook(_hook)
+
+
+def install_encoder_hook(encoder, sink: Callable[[dict], None]):
+    """Hook the SAM3 fusion encoder so `sink(out)` gets its output dict
+    ({"memory", "spatial_shapes", "level_start_index", ...}) on every fire.
+    Returns the handle."""
+
+    def _hook(module, args, output):
+        if isinstance(output, dict) and "memory" in output:
+            sink(output)
+
+    return encoder.register_forward_hook(_hook)

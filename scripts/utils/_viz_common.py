@@ -12,10 +12,11 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 from idisc.models._sam3_common import IMAGENET_MEAN, IMAGENET_STD
 
 ISD_LABELS = {
-    "replace": "SAM3 IDR assignment",
-    "translate": "SAM3→IDR assignment",
+    "linear_proj": "SAM3 IDR assignment",
+    "replace": "SAM3 IDR assignment",  # legacy alias of linear_proj
 }
-SAM_MODE_CHOICES = ["replace", "translate"]
+# "replace" kept for viz of historical run snapshots (renamed to linear_proj).
+SAM_MODE_CHOICES = ["linear_proj", "replace"]
 
 
 def denormalize_to_float01_hwc(img_tensor: torch.Tensor) -> np.ndarray:

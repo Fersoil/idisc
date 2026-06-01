@@ -6,7 +6,7 @@ the schema. Two execution paths share a single per-frame inner loop:
 
   - encoder=resnet101 (idr_source=afp)  → standard image dataloader, AFP IDRs.
   - encoder=sam3_image (idr_source=sam3) → SAM3 produces queries per frame;
-        replace or translate path consumes them; sequence datasets get flattened.
+        the linear_proj or adapter path consumes them; sequences get flattened.
   - encoder=sam3_video (idr_source=sam3) → FPN+queries pre-extracted per clip,
         then per-frame depth-head forward (avoids re-running the backbone).
 """
@@ -143,6 +143,11 @@ def _set_trainable(model, encoder_name):
         if sam_module is not None:
             for p in sam_module.parameters():
                 p.requires_grad = False
+        # Re-enable the finetunable SAM3 parts; trunk and text stay frozen.
+        enc = model.pixel_encoder
+        for part in getattr(enc, "sam3_trainable", []):
+            enc._sam3_submodule(part).requires_grad_(True)
+            print(f"  SAM3 unfrozen: {part}", flush=True)
 
 
 def _trainable_state_dict(model, encoder_name):
@@ -150,9 +155,11 @@ def _trainable_state_dict(model, encoder_name):
     sam_checkpoint at startup; persisting them per-save bloats ckpt ~16x."""
     sd = model.state_dict()
     if encoder_name.startswith("sam3"):
+        # Drop the frozen backbone but keep any unfrozen (sam3_trainable) params.
+        trainable_names = {n for n, p in model.named_parameters() if p.requires_grad}
+        frozen = ("pixel_encoder.sam_model.", "pixel_encoder.video_model.")
         sd = {k: v for k, v in sd.items()
-              if not k.startswith("pixel_encoder.sam_model.")
-              and not k.startswith("pixel_encoder.video_model.")}
+              if not k.startswith(frozen) or k in trainable_names}
     return sd
 
 
@@ -167,6 +174,7 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
     output_dir = finetune_cfg["output_dir"]
     n_iters = int(finetune_cfg["n_iters"])
     lr = float(finetune_cfg["lr"])
+    sam3_lr = float(finetune_cfg.get("sam3_lr", lr))
     val_interval = int(finetune_cfg["val_interval"])
     batch_size = int(finetune_cfg["batch_size"])
     amp_dtype = _DTYPE_MAP.get(finetune_cfg.get("amp_dtype", "bfloat16"), torch.bfloat16)
@@ -214,7 +222,7 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
     valid_dataset = getattr(custom_dataset, dataset_cls)(test_mode=True, **common_kwargs)
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
-        num_workers=4, pin_memory=True, drop_last=True,
+        num_workers=2, pin_memory=True, drop_last=True,
     )
     valid_loader = DataLoader(
         valid_dataset, batch_size=1, shuffle=False,
@@ -223,10 +231,25 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
     )
     print(f"  Train: {len(train_dataset)}, Val: {len(valid_dataset)}", flush=True)
 
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=0.01)
+    # iDisc head trains at `lr`, any unfrozen SAM3 parts at the lower `sam3_lr`.
+    sam3_params = [p for n, p in model.named_parameters()
+                   if p.requires_grad and ".sam_model." in n]
+    head_params = [p for n, p in model.named_parameters()
+                   if p.requires_grad and ".sam_model." not in n]
+    if sam3_params:
+        optimizer = optim.AdamW(
+            [{"params": head_params, "lr": lr, "weight_decay": 0.01},
+             {"params": sam3_params, "lr": sam3_lr, "weight_decay": 0.0}],
+        )
+        max_lr = [lr, sam3_lr]
+        print(f"  LR groups: head {len(head_params)} tensors @ {lr:.1e}, "
+              f"SAM3 {len(sam3_params)} tensors @ {sam3_lr:.1e}", flush=True)
+    else:
+        optimizer = optim.AdamW(head_params, lr=lr, weight_decay=0.01)
+        max_lr = lr
+    trainable_params = head_params + sam3_params
     scheduler = OneCycleLR(
-        optimizer, max_lr=lr, total_steps=n_iters,
+        optimizer, max_lr=max_lr, total_steps=n_iters,
         pct_start=0.1, div_factor=10, final_div_factor=100,
     )
     amp_enabled = device.type == "cuda" and amp_dtype != torch.float32

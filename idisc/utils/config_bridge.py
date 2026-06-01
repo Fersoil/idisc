@@ -4,7 +4,8 @@ Schema (enforced here):
   run.task          in {"train", "eval"}
   run.dataset_mode  in {"image", "video"}
   method.idr_source in {"afp", "sam3"}
-  method.sam_mode   in {None, "replace", "translate"}; must be None iff idr_source == "afp"
+  method.sam_mode   in {None, "linear_proj", "adapter"}; must be None iff idr_source == "afp"
+                    (legacy "replace" is accepted and normalized to "linear_proj")
   method.prompt.mode in {None, "multiclass", "singleclass"};
                       must be non-None iff a SAM3 pixel_encoder is configured;
                       when non-None, method.prompt.classes must be non-empty.
@@ -14,6 +15,7 @@ those values are mirrored into model.pixel_encoder so the encoder factory
 keeps reading from its own config block.
 """
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +25,9 @@ from omegaconf import DictConfig, OmegaConf
 _VALID_TASKS = {"train", "eval"}
 _VALID_DATASET_MODES = {"image", "video"}
 _VALID_IDR_SOURCES = {"afp", "sam3"}
-_VALID_SAM_MODES = {None, "replace", "translate"}
+_VALID_SAM_MODES = {None, "linear_proj", "adapter"}
 _VALID_PROMPT_MODES = {None, "multiclass", "singleclass"}
+_VALID_PIXEL_SOURCES = {"msda", "sam3_memory", "backbone_fpn"}
 
 
 def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +54,15 @@ def _validate(runtime: dict[str, Any]) -> None:
 
     method = runtime.get("method", {})
     idr_source = method.get("idr_source")
+    # Back-compat: "replace" was renamed to "linear_proj" (it is a Linear
+    # projection of the SAM3 queries). Normalize so retired configs / old run
+    # snapshots keep validating.
+    if method.get("sam_mode") == "replace":
+        warnings.warn(
+            "method.sam_mode='replace' is deprecated; use 'linear_proj'.",
+            stacklevel=2,
+        )
+        method["sam_mode"] = "linear_proj"
     sam_mode = method.get("sam_mode")
     if idr_source not in _VALID_IDR_SOURCES:
         raise ValueError(
@@ -64,7 +76,8 @@ def _validate(runtime: dict[str, Any]) -> None:
         raise ValueError("method.sam_mode must be null when idr_source='afp'")
     if idr_source == "sam3" and sam_mode is None:
         raise ValueError(
-            "method.sam_mode must be 'replace' or 'translate' when idr_source='sam3'"
+            "method.sam_mode must be 'linear_proj' or 'adapter' "
+            "when idr_source='sam3'"
         )
 
     encoder_name = (
@@ -78,6 +91,15 @@ def _validate(runtime: dict[str, Any]) -> None:
     if encoder_name == "sam3_video" and dataset_mode != "video":
         raise ValueError(
             "pixel_encoder.name='sam3_video' requires run.dataset_mode='video'"
+        )
+
+    pixel_source = (
+        runtime.get("model", {}).get("pixel_encoder", {}).get("pixel_source", "msda")
+    )
+    if pixel_source not in _VALID_PIXEL_SOURCES:
+        raise ValueError(
+            f"pixel_encoder.pixel_source must be one of {_VALID_PIXEL_SOURCES}, "
+            f"got {pixel_source!r}"
         )
 
     prompt = method.get("prompt", {}) or {}

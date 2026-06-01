@@ -4,9 +4,9 @@ Licensed under the CC-BY NC 4.0 license (http://creativecommons.org/licenses/by-
 
 Top-level `IDisc` model. Composes pixel_encoder → pixel_decoder → AFP/IDR → ISD.
 `sam_mode` selects the IDR source when SAM3 queries are present:
-  - None        — encoder produces no queries; IDRs come from AFP (baseline).
-  - "replace"   — IDRs come from a Linear projection of SAM3 queries (sam3_proj).
-  - "translate" — IDRs come from cross-attention over SAM3 queries (Sam3QueryToIDR).
+  - None          — encoder produces no queries; IDRs come from AFP (baseline).
+  - "linear_proj" — IDRs come from a Linear projection of SAM3 queries (sam3_proj).
+  - "adapter"     — IDRs are SAM3 queries enriched with FPN context (ContextAdapter).
 `IDisc.build(config)` is the canonical constructor — do not call __init__ directly.
 """
 
@@ -21,7 +21,7 @@ import torch.nn.functional as F
 
 from idisc.models.defattn_decoder import MSDeformAttnPixelDecoder
 from idisc.models.fpn_decoder import BasePixelDecoder
-from idisc.models.id_module import AFP, ISD, Sam3QueryToIDR
+from idisc.models.id_module import AFP, ContextAdapter, ISD
 
 SAM3_D_MODEL = 256
 
@@ -38,7 +38,7 @@ class IDisc(nn.Module):
         eps: float = 1e-6,
         num_resolutions: int = 3,
         latent_dim: int = 128,
-        sam3_translate: Optional[nn.Module] = None,
+        context_adapter: Optional[nn.Module] = None,
         **kwargs
     ):
         super().__init__()
@@ -55,7 +55,7 @@ class IDisc(nn.Module):
             nn.Linear(SAM3_D_MODEL, latent_dim)
             for _ in range(num_resolutions)
         ])
-        self.sam3_translate = sam3_translate
+        self.context_adapter = context_adapter
 
     def invert_encoder_output_order(
         self, xs: Tuple[torch.Tensor, ...]
@@ -79,8 +79,8 @@ class IDisc(nn.Module):
         """
         Args:
             instance_queries: SAM3 query embeddings (K, 256) for sam_mode in
-                {replace, translate}. If None, IDRs come from AFP.
-            sam_mode: None | "replace" | "translate".
+                {linear_proj, adapter}. If None, IDRs come from AFP.
+            sam_mode: None | "linear_proj" | "adapter".
             pre_extracted_encoder_outputs: If provided, skip the pixel_encoder
                 call. Used by the video encoder training loop to avoid
                 double-running the backbone.
@@ -99,19 +99,24 @@ class IDisc(nn.Module):
                     instance_queries = encoder_queries
             encoder_outputs = self.invert_encoder_output_order(encoder_outputs)
 
-        fpn_outputs, decoder_outputs = self.pixel_decoder(encoder_outputs)
+        if self.pixel_decoder is not None:
+            fpn_outputs, decoder_outputs = self.pixel_decoder(encoder_outputs)
+        else:
+            # pixel_source in {sam3_memory, backbone_fpn}: encoder features feed
+            # ISD directly (no iDisc pixel decoder).
+            fpn_outputs = decoder_outputs = tuple(encoder_outputs)
         decoder_outputs = self.filter_decoder_relevant_resolutions(decoder_outputs)
         fpn_outputs = self.filter_decoder_relevant_resolutions(fpn_outputs)
 
         if instance_queries is not None and instance_queries.shape[0] > 0:
             iq = instance_queries.unsqueeze(0) if instance_queries.dim() == 2 else instance_queries
-            if sam_mode == "translate":
-                if self.sam3_translate is None:
+            if sam_mode == "adapter":
+                if self.context_adapter is None:
                     raise RuntimeError(
-                        "sam_mode='translate' requires sam3_translate to be built"
+                        "sam_mode='adapter' requires context_adapter to be built"
                     )
-                idrs = self.sam3_translate(iq)
-            else:
+                idrs = self.context_adapter(iq, decoder_outputs)
+            else:  # "linear_proj": one Linear per resolution over the queries
                 idrs = tuple(proj(iq) for proj in self.sam3_proj)
         else:
             idrs = self.afp(decoder_outputs)
@@ -137,8 +142,19 @@ class IDisc(nn.Module):
                 )
             out_lst.append(out)
 
+        out = torch.mean(torch.stack(out_lst, dim=0), dim=0)
+        # Crop the content band out of a letterboxed prediction before resizing.
+        # Encoders that don't letterbox lack output_crop_geometry -> full-frame.
+        geom = getattr(self.pixel_encoder, "output_crop_geometry", None)
+        ft, fl, fh, fw = (
+            geom(original_shape) if geom is not None else (0.0, 0.0, 1.0, 1.0)
+        )
+        _, _, H, W = out.shape
+        top, left = round(ft * H), round(fl * W)
+        h_c, w_c = max(1, round(fh * H)), max(1, round(fw * W))
+        out = out[:, :, top:top + h_c, left:left + w_c]
         out = F.interpolate(
-            torch.mean(torch.stack(out_lst, dim=0), dim=0),
+            out,
             original_shape,
             # Legacy code for reproducibility for normals...
             mode="bilinear" if out.shape[1] == 1 else "bicubic",
@@ -230,6 +246,8 @@ class IDisc(nn.Module):
             "load_from_HF",
             "use_presence_score",
             "confidence_threshold",
+            "pixel_source",
+            "sam3_trainable",
         ):
             if extra_key in config["model"]["pixel_encoder"]:
                 config_backone[extra_key] = config["model"]["pixel_encoder"][extra_key]
@@ -242,17 +260,22 @@ class IDisc(nn.Module):
         pixel_encoder_embed_dims = getattr(pixel_encoder, "embed_dims")
         config["model"]["pixel_encoder"]["embed_dims"] = pixel_encoder_embed_dims
 
-        pixel_decoder = (
-            MSDeformAttnPixelDecoder.build(config)
-            if config["model"]["attn_dec"]
-            else BasePixelDecoder.build(config)
-        )
+        # sam3_memory and backbone_fpn feed ISD directly, so no iDisc pixel decoder.
+        pixel_source = config["model"]["pixel_encoder"].get("pixel_source", "msda")
+        if pixel_source in ("sam3_memory", "backbone_fpn"):
+            pixel_decoder = None
+        else:
+            pixel_decoder = (
+                MSDeformAttnPixelDecoder.build(config)
+                if config["model"]["attn_dec"]
+                else BasePixelDecoder.build(config)
+            )
         afp = AFP.build(config)
         isd = ISD.build(config)
 
-        sam3_translate = (
-            Sam3QueryToIDR.build(config)
-            if "sam3_translate" in config["model"]
+        context_adapter = (
+            ContextAdapter.build(config)
+            if config.get("method", {}).get("sam_mode") == "adapter"
             else None
         )
 
@@ -270,6 +293,6 @@ class IDisc(nn.Module):
                 - config["model"]["isd"]["num_resolutions"],
                 num_resolutions=config["model"]["isd"]["num_resolutions"],
                 latent_dim=config["model"]["afp"]["latent_dim"],
-                sam3_translate=sam3_translate,
+                context_adapter=context_adapter,
             )
         )

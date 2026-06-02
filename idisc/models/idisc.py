@@ -88,15 +88,18 @@ class IDisc(nn.Module):
         losses = {"opt": {}, "stat": {}}
         original_shape = gt.shape[-2:] if gt is not None else image.shape[-2:]
 
+        encoder_masks = None
         if pre_extracted_encoder_outputs is not None:
             encoder_outputs = pre_extracted_encoder_outputs
         else:
             encoder_outputs = self.pixel_encoder(image)
             if getattr(self.pixel_encoder, "yields_instance_queries", False):
-                *encoder_outputs, encoder_queries = encoder_outputs
+                *encoder_outputs, encoder_trailing = encoder_outputs
                 encoder_outputs = tuple(encoder_outputs)
-                if instance_queries is None:
-                    instance_queries = encoder_queries
+                if getattr(self.pixel_encoder, "yields_instance_masks", False):
+                    encoder_masks = encoder_trailing
+                elif instance_queries is None:
+                    instance_queries = encoder_trailing
             encoder_outputs = self.invert_encoder_output_order(encoder_outputs)
 
         if self.pixel_decoder is not None:
@@ -108,19 +111,25 @@ class IDisc(nn.Module):
         decoder_outputs = self.filter_decoder_relevant_resolutions(decoder_outputs)
         fpn_outputs = self.filter_decoder_relevant_resolutions(fpn_outputs)
 
-        if instance_queries is not None and instance_queries.shape[0] > 0:
-            iq = instance_queries.unsqueeze(0) if instance_queries.dim() == 2 else instance_queries
-            if sam_mode == "adapter":
-                if self.context_adapter is None:
-                    raise RuntimeError(
-                        "sam_mode='adapter' requires context_adapter to be built"
-                    )
-                idrs = self.context_adapter(iq, decoder_outputs)
-            else:  # "linear_proj": one Linear per resolution over the queries
-                idrs = tuple(proj(iq) for proj in self.sam3_proj)
+        idrs = None
+        if sam_mode == "mask_pool":
+            assert self.context_adapter is None
+            assert encoder_masks is not None, "sam_mode='mask_pool' requires encoder masks"
+            outs = self.isd(fpn_outputs, masks=encoder_masks)
         else:
-            idrs = self.afp(decoder_outputs)
-        outs = self.isd(fpn_outputs, idrs)
+            if instance_queries is not None and instance_queries.shape[0] > 0:
+                iq = instance_queries.unsqueeze(0) if instance_queries.dim() == 2 else instance_queries
+                if sam_mode == "adapter":
+                    if self.context_adapter is None:
+                        raise RuntimeError(
+                            "sam_mode='adapter' requires context_adapter to be built"
+                        )
+                    idrs = self.context_adapter(iq, decoder_outputs)
+                else:  # "linear_proj": one Linear per resolution over the queries
+                    idrs = tuple(proj(iq) for proj in self.sam3_proj)
+            else:
+                idrs = self.afp(decoder_outputs)
+            outs = self.isd(fpn_outputs, idrs)
 
         out_lst = []
         for out in outs:
@@ -249,9 +258,13 @@ class IDisc(nn.Module):
             "pixel_source",
             "sam3_trainable",
             "lora",
+            "memory_fpn_scale",
         ):
             if extra_key in config["model"]["pixel_encoder"]:
                 config_backone[extra_key] = config["model"]["pixel_encoder"][extra_key]
+        config_backone["mask_pool"] = (
+            config.get("method", {}).get("sam_mode") == "mask_pool"
+        )
         import importlib
 
         mod = importlib.import_module("idisc.models.encoder")

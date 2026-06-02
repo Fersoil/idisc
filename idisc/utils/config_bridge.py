@@ -25,7 +25,7 @@ from omegaconf import DictConfig, OmegaConf
 _VALID_TASKS = {"train", "eval"}
 _VALID_DATASET_MODES = {"image", "video"}
 _VALID_IDR_SOURCES = {"afp", "sam3"}
-_VALID_SAM_MODES = {None, "linear_proj", "adapter"}
+_VALID_SAM_MODES = {None, "linear_proj", "adapter", "mask_pool"}
 _VALID_PROMPT_MODES = {None, "multiclass", "singleclass"}
 _VALID_PIXEL_SOURCES = {"msda", "sam3_memory", "backbone_fpn"}
 _VALID_LORA_TARGETS = {"qkv", "proj", "fc1", "fc2"}
@@ -122,10 +122,35 @@ def _validate(runtime: dict[str, Any]) -> None:
         )
     if is_sam3_encoder and prompt_mode is None:
         raise ValueError("SAM3 encoders require method.prompt.mode to be set")
-    if prompt_mode is not None and not prompt.get("classes"):
+    if prompt_mode is not None and not prompt.get("classes") and sam_mode != "mask_pool":
         raise ValueError(
             f"method.prompt.mode={prompt_mode!r} requires non-empty method.prompt.classes"
         )
+
+    if sam_mode == "mask_pool":
+        if idr_source != "sam3":
+            raise ValueError("method.sam_mode='mask_pool' requires method.idr_source='sam3'")
+        if encoder_name != "sam3_image":
+            raise ValueError(
+                "method.sam_mode='mask_pool' requires pixel_encoder.name='sam3_image', "
+                f"got {encoder_name!r}"
+            )
+        if pixel_source not in ("sam3_memory", "backbone_fpn"):
+            raise ValueError(
+                "method.sam_mode='mask_pool' requires pixel_encoder.pixel_source in "
+                f"{{sam3_memory, backbone_fpn}}, got {pixel_source!r}"
+            )
+        if prompt_mode != "multiclass":
+            raise ValueError(
+                "method.sam_mode='mask_pool' requires method.prompt.mode='multiclass', "
+                f"got {prompt_mode!r}"
+            )
+        trainable = runtime.get("model", {}).get("pixel_encoder", {}).get("sam3_trainable", [])
+        if "head" in trainable and "decoder" not in trainable:
+            raise ValueError(
+                "sam3_trainable='head' requires 'decoder' to also be in sam3_trainable "
+                "(head is downstream of the decoder)"
+            )
 
 
 def build_runtime_config(

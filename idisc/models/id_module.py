@@ -7,6 +7,7 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 
 from idisc.utils import (AttentionLayer, PositionEmbeddingSine,
@@ -55,6 +56,7 @@ class ISDHead(nn.Module):
                     nn.Linear(expansion * pixel_dim, pixel_dim),
                 ),
             )
+        self.value_proj = nn.Linear(query_dim, pixel_dim)
         setattr(
             self,
             "proj_output",
@@ -66,16 +68,21 @@ class ISDHead(nn.Module):
             ),
         )
 
-    def forward(self, feature_map: torch.Tensor, idrs: torch.Tensor):
+    def forward(self, feature_map, idrs=None, assign=None, centers=None):
         b, c, h, w = feature_map.shape
         feature_map = rearrange(
             feature_map + self.pixel_pe(feature_map), "b c h w -> b (h w) c"
         )
 
-        for i in range(self.depth):
-            update = getattr(self, f"cross_attn_{i+1}")(feature_map.clone(), idrs)
-            feature_map = feature_map + update
-            feature_map = feature_map + getattr(self, f"mlp_{i+1}")(feature_map.clone())
+        if assign is not None:
+            feature_map = feature_map + assign @ self.value_proj(centers)
+            for i in range(self.depth):
+                feature_map = feature_map + getattr(self, f"mlp_{i+1}")(feature_map.clone())
+        else:
+            for i in range(self.depth):
+                update = getattr(self, f"cross_attn_{i+1}")(feature_map.clone(), idrs)
+                feature_map = feature_map + update
+                feature_map = feature_map + getattr(self, f"mlp_{i+1}")(feature_map.clone())
         out = getattr(self, "proj_output")(feature_map)
         out = rearrange(out, "b (h w) c -> b c h w", h=h, w=w)
 
@@ -113,12 +120,23 @@ class ISD(nn.Module):
                 ),
             )
 
-    def forward(
-        self, xs: Tuple[torch.Tensor, ...], idrs: Tuple[torch.Tensor, ...]
-    ) -> Tuple[torch.Tensor, ...]:
-        outs, attns = [], []
+    def forward(self, xs, idrs=None, masks=None):
+        outs = []
         for i in range(self.num_resolutions):
-            out = getattr(self, f"head_{i+1}")(xs[i], idrs[i])
+            if masks is not None:
+                m = torch.sigmoid(
+                    F.interpolate(masks, size=xs[i].shape[-2:],
+                                  mode="bilinear", align_corners=False)
+                )
+                if not masks.requires_grad:
+                    m = m.detach()
+                mf = m.flatten(2)
+                xf = xs[i].flatten(2).transpose(1, 2)
+                centers = (mf @ xf) / (mf.sum(-1, keepdim=True) + 1e-6)
+                assign = (mf / (mf.sum(1, keepdim=True) + 1e-6)).transpose(1, 2)
+                out = getattr(self, f"head_{i+1}")(xs[i], assign=assign, centers=centers)
+            else:
+                out = getattr(self, f"head_{i+1}")(xs[i], idrs[i])
             outs.append(out)
         return tuple(outs)
 
@@ -341,13 +359,15 @@ class ContextAdapter(nn.Module):
 class MemoryFPN(nn.Module):
     """Learned SimpleFPN turning SAM3's single fusion `memory` level into an
     n-level pyramid with ConvTranspose (up) / conv (same) / strided conv (down).
-    Level i has scale 2**(1-i): a 72x72 input, n_levels=3 -> [144^2, 72^2, 36^2]."""
+    Level i has scale `top_scale / 2**i`: 72x72 input, top_scale=2 -> [144^2,72^2,36^2];
+    top_scale=4 -> [288^2,144^2,72^2] (matches backbone_fpn resolution)."""
 
-    def __init__(self, dim: int = 256, n_levels: int = 3, num_groups: int = 8):
+    def __init__(self, dim: int = 256, n_levels: int = 3, num_groups: int = 8,
+                 top_scale: int = 2):
         super().__init__()
         self.blocks = nn.ModuleList()
         for i in range(n_levels):
-            scale = 2.0 ** (1 - i)
+            scale = top_scale / (2.0 ** i)
             layers = []
             if scale > 1.0:
                 f = int(scale)

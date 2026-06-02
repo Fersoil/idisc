@@ -45,6 +45,7 @@ def _patch_addmm_act_for_grad():
 
 class Sam3PixelEncoder(nn.Module):
     yields_instance_queries: bool = True
+    yields_instance_masks: bool = False
     embed_dims: List[int]
 
     def __init__(
@@ -59,6 +60,8 @@ class Sam3PixelEncoder(nn.Module):
         pixel_source: str = "msda",
         sam3_trainable: Optional[Sequence[str]] = None,
         lora: Optional[dict] = None,
+        mask_pool: bool = False,
+        memory_fpn_scale: int = 2,
         **kwargs,
     ):
         super().__init__()
@@ -110,9 +113,17 @@ class Sam3PixelEncoder(nn.Module):
                   f"({lora.get('targets', ['qkv', 'proj'])}), "
                   f"r={lora.get('rank', 8)} alpha={lora.get('alpha', 16)}", flush=True)
 
+        self._mask_pool = bool(mask_pool)
+        if self._mask_pool:
+            self._grad_grounding = True
+            self.yields_instance_masks = True
+            print("  mask_pool: IDRs from mask-pooled features (SAM3 masks "
+                  "as the discretization)", flush=True)
+
         self.embed_dims = [256] * infer_num_levels(self.sam_model.backbone)
         self.memory_fpn = (
-            MemoryFPN(dim=256, n_levels=len(self.embed_dims))
+            MemoryFPN(dim=256, n_levels=len(self.embed_dims),
+                      top_scale=int(memory_fpn_scale))
             if self.pixel_source == "sam3_memory" else None
         )
 
@@ -133,8 +144,10 @@ class Sam3PixelEncoder(nn.Module):
             return self.sam_model.transformer.encoder
         if part == "decoder":
             return self.sam_model.transformer.decoder
+        if part == "head":
+            return self.sam_model.segmentation_head
         raise ValueError(f"unknown sam3_trainable part {part!r}; "
-                         "expected one of neck/encoder/decoder")
+                         "expected one of neck/encoder/decoder/head")
 
     def _ensure_processor(self, device: torch.device):
         if self._proc is not None and self._proc_device == device:
@@ -219,14 +232,19 @@ class Sam3PixelEncoder(nn.Module):
                 geometric_prompt=self.sam_model._get_dummy_prompt(),
                 find_target=None,
             )
-        queries = out["queries"][0].float()
+        if self._mask_pool:
+            instance = out["pred_masks"][0].float()
+            if instance.dim() == 4:
+                instance = instance.squeeze(1)
+        else:
+            instance = out["queries"][0].float()
         if self.pixel_source == "sam3_memory":
             eo = out["prev_encoder_out"]["encoder_out"]
             mem_map = self._memory_map(
                 out["encoder_hidden_states"], eo["spatial_shapes"], eo["level_start_index"],
             )
-            return [mem_map], queries
-        return [t.float() for t in backbone_out["backbone_fpn"]], queries
+            return [mem_map], instance
+        return [t.float() for t in backbone_out["backbone_fpn"]], instance
 
     def _run_once(self, raw_image: torch.Tensor):
         device_type = raw_image.device.type
@@ -285,14 +303,14 @@ class Sam3PixelEncoder(nn.Module):
         B = image.shape[0]
 
         per_level: Optional[List[List[torch.Tensor]]] = None
-        per_query: List[torch.Tensor] = []
+        per_instance: List[torch.Tensor] = []
         for b in range(B):
-            feats_b, queries = self._run_once(denorm[b])
+            feats_b, instance = self._run_once(denorm[b])
             if per_level is None:
                 per_level = [[] for _ in feats_b]
             for i, f in enumerate(feats_b):
                 per_level[i].append(f if f.dim() == 4 else f.unsqueeze(0))
-            per_query.append(queries)
+            per_instance.append(instance)
         stacked = [torch.cat(p, dim=0) for p in per_level]
 
         if self.pixel_source == "sam3_memory":
@@ -300,12 +318,15 @@ class Sam3PixelEncoder(nn.Module):
         else:
             feats = list(stacked)
 
-        max_k = max(q.shape[0] for q in per_query)
-        padded = torch.zeros(B, max_k, 256, device=device, dtype=torch.float32)
-        for b, q in enumerate(per_query):
-            padded[b, : q.shape[0]] = q
+        if self._mask_pool:
+            instance_out = torch.stack(per_instance, dim=0)
+        else:
+            max_k = max(q.shape[0] for q in per_instance)
+            instance_out = torch.zeros(B, max_k, 256, device=device, dtype=torch.float32)
+            for b, q in enumerate(per_instance):
+                instance_out[b, : q.shape[0]] = q
 
-        return (*feats, padded)
+        return (*feats, instance_out)
 
     def output_crop_geometry(self, original_shape):
         # Content-band fractions of the letterboxed square; IDisc.forward crops

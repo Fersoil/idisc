@@ -20,6 +20,27 @@ from idisc.models._sam3_common import (
     letterbox_to_square,
 )
 from idisc.models.id_module import MemoryFPN
+from idisc.models.lora import LoRALinear, inject_lora
+
+
+def _patch_addmm_act_for_grad():
+    """SAM3's fused ``addmm_act`` raises when grad is enabled (it detaches weights
+    for an inference fast-path). When we run the trunk with grad for LoRA, fall
+    back to the plain ``act(linear(x))`` it stands in for. Idempotent; the frozen
+    path (grad disabled) still hits the original fused op."""
+    import sam3.model.vitdet as vitdet
+
+    if getattr(vitdet.addmm_act, "_grad_aware", False):
+        return
+    orig = vitdet.addmm_act
+
+    def addmm_act(activation, linear, x):
+        if torch.is_grad_enabled():
+            return activation()(linear(x))
+        return orig(activation, linear, x)
+
+    addmm_act._grad_aware = True
+    vitdet.addmm_act = addmm_act
 
 
 class Sam3PixelEncoder(nn.Module):
@@ -37,6 +58,7 @@ class Sam3PixelEncoder(nn.Module):
         confidence_threshold: float = 0.0,
         pixel_source: str = "msda",
         sam3_trainable: Optional[Sequence[str]] = None,
+        lora: Optional[dict] = None,
         **kwargs,
     ):
         super().__init__()
@@ -66,16 +88,34 @@ class Sam3PixelEncoder(nn.Module):
         for part in self.sam3_trainable:
             self._sam3_submodule(part).requires_grad_(True)
 
+        # LoRA on the otherwise-frozen ViT trunk. 
+        lora = lora or {}
+        self._lora = bool(lora.get("enabled", False))
+        if self._lora:
+            _patch_addmm_act_for_grad()
+            trunk = self.sam_model.backbone.vision_backbone.trunk
+            n = inject_lora(
+                trunk,
+                targets=tuple(lora.get("targets", ["qkv", "proj"])),
+                r=int(lora.get("rank", 8)),
+                alpha=int(lora.get("alpha", 16)),
+                dropout=float(lora.get("dropout", 0.0)),
+            )
+            for m in trunk.modules():
+                if isinstance(m, LoRALinear):
+                    m.lora_A.requires_grad_(True)
+                    m.lora_B.requires_grad_(True)
+            self._grad_grounding = True
+            print(f"  LoRA on ViT trunk: {n} layers "
+                  f"({lora.get('targets', ['qkv', 'proj'])}), "
+                  f"r={lora.get('rank', 8)} alpha={lora.get('alpha', 16)}", flush=True)
+
         self.embed_dims = [256] * infer_num_levels(self.sam_model.backbone)
         self.memory_fpn = (
             MemoryFPN(dim=256, n_levels=len(self.embed_dims))
             if self.pixel_source == "sam3_memory" else None
         )
 
-        # SAM3 doesn't expose decoder hidden states via the processor API;
-        # hook the transformer decoder to capture per-slot tokens. Processor
-        # and hook are registered lazily so the closure binds the post-deepcopy
-        # self (IDisc.build deepcopies the assembled model).
         self._proc = None
         self._proc_device: Optional[torch.device] = None
         self._last_hs: Optional[torch.Tensor] = None
@@ -134,14 +174,15 @@ class Sam3PixelEncoder(nn.Module):
         return mem[s:s + h * w].permute(1, 2, 0).reshape(mem.shape[1], 256, h, w)
 
     def _forward_image_grad(self, img: torch.Tensor) -> dict:
-        # Grad-enabled backbone.forward_image: the frozen ViT trunk runs under
-        # no_grad (its fused addmm_act MLP asserts grad is off), the trainable
-        # neck convs run with grad.
         bb = self.sam_model.backbone
         neck = bb.vision_backbone
-        with torch.no_grad():
+        if self._lora:
             xs = neck.trunk(img)
-        x = getattr(xs[-1], "tensors", xs[-1]).detach()
+            x = getattr(xs[-1], "tensors", xs[-1])
+        else:
+            with torch.no_grad():
+                xs = neck.trunk(img)
+            x = getattr(xs[-1], "tensors", xs[-1]).detach()
         sam3_features, sam3_pos = [], []
         for conv in neck.convs:
             o = conv(x)
@@ -235,6 +276,8 @@ class Sam3PixelEncoder(nn.Module):
     def forward(self, image: torch.Tensor):
         if self._freeze_sam3:
             self.sam_model.eval()
+            if self._lora:
+                self.sam_model.backbone.vision_backbone.trunk.train()
         device = image.device
         self._ensure_processor(device)
         denorm = denormalize_imagenet(image)

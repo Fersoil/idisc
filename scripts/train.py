@@ -30,6 +30,7 @@ from torch.utils.data import DataLoader, SequentialSampler
 
 import idisc.dataloders as custom_dataset
 from idisc.models.idisc import IDisc
+from idisc.models.lora import LoRALinear
 from idisc.utils import DICT_METRICS_DEPTH, RunningMetric, format_seconds
 from idisc.utils.tracking import log_metrics
 
@@ -148,6 +149,15 @@ def _set_trainable(model, encoder_name):
         for part in getattr(enc, "sam3_trainable", []):
             enc._sam3_submodule(part).requires_grad_(True)
             print(f"  SAM3 unfrozen: {part}", flush=True)
+
+        n_lora = 0
+        for m in enc.modules():
+            if isinstance(m, LoRALinear):
+                m.lora_A.requires_grad_(True)
+                m.lora_B.requires_grad_(True)
+                n_lora += 1
+        if n_lora:
+            print(f"  SAM3 trunk LoRA: {n_lora} layers trainable", flush=True)
 
 
 def _trainable_state_dict(model, encoder_name):

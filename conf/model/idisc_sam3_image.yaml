@@ -41,6 +41,12 @@ model:
     confidence_threshold: 0.0
     pixel_source: msda          # msda | sam3_memory | backbone_fpn
     sam3_trainable: []          # subset of [neck, encoder, decoder]; [] = frozen
+    lora:                       # LoRA on the frozen ViT trunk (opt-in)
+      enabled: false
+      rank: 8
+      alpha: 16
+      dropout: 0.0
+      targets: [qkv, proj]      # trunk attention linears to adapt
   afp:
     context_low_resolutions_skip: 1
     depths: 2

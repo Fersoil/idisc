@@ -248,6 +248,7 @@ class IDisc(nn.Module):
             "confidence_threshold",
             "pixel_source",
             "sam3_trainable",
+            "lora",
         ):
             if extra_key in config["model"]["pixel_encoder"]:
                 config_backone[extra_key] = config["model"]["pixel_encoder"][extra_key]

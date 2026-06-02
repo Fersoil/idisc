@@ -28,6 +28,7 @@ _VALID_IDR_SOURCES = {"afp", "sam3"}
 _VALID_SAM_MODES = {None, "linear_proj", "adapter"}
 _VALID_PROMPT_MODES = {None, "multiclass", "singleclass"}
 _VALID_PIXEL_SOURCES = {"msda", "sam3_memory", "backbone_fpn"}
+_VALID_LORA_TARGETS = {"qkv", "proj", "fc1", "fc2"}
 
 
 def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +102,17 @@ def _validate(runtime: dict[str, Any]) -> None:
             f"pixel_encoder.pixel_source must be one of {_VALID_PIXEL_SOURCES}, "
             f"got {pixel_source!r}"
         )
+
+    lora = runtime.get("model", {}).get("pixel_encoder", {}).get("lora", {}) or {}
+    if lora.get("enabled"):
+        if not is_sam3_encoder:
+            raise ValueError("pixel_encoder.lora.enabled requires a SAM3 pixel_encoder")
+        bad = set(lora.get("targets", [])) - _VALID_LORA_TARGETS
+        if bad:
+            raise ValueError(
+                f"pixel_encoder.lora.targets must be a subset of "
+                f"{_VALID_LORA_TARGETS}, got unexpected {bad}"
+            )
 
     prompt = method.get("prompt", {}) or {}
     prompt_mode = prompt.get("mode")

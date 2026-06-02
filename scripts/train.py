@@ -389,18 +389,19 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
                             {"global_step": step, "val/best_abs_rel": best_abs_rel},
                             step=step,
                         )
-                ckpt_path = os.path.join(output_dir, f"checkpoint_step{step}.pt")
-                torch.save(_trainable_state_dict(model, encoder_name), ckpt_path)
-                print(f"  Checkpoint saved to {ckpt_path}\n", flush=True)
 
-    final_path = os.path.join(output_dir, "final_sam_finetuned.pt")
-    torch.save(_trainable_state_dict(model, encoder_name), final_path)
-    print(f"\nTraining complete. Final model saved to {final_path}", flush=True)
+                last_path = os.path.join(output_dir, "last_sam_finetuned.pt")
+                torch.save(_trainable_state_dict(model, encoder_name), last_path)
+                print(f"  Checkpoint saved to {last_path}\n", flush=True)
+
+    last_path = os.path.join(output_dir, "last_sam_finetuned.pt")
+    torch.save(_trainable_state_dict(model, encoder_name), last_path)
+    print(f"\nTraining complete. Last model saved to {last_path}", flush=True)
     print(f"Best abs_rel: {best_abs_rel:.6f}", flush=True)
 
     return {
         "best_abs_rel": float(best_abs_rel),
-        "final_checkpoint": final_path,
+        "last_checkpoint": last_path,
         "output_dir": output_dir,
         "sam_mode": sam_mode,
         "idr_source": idr_source,

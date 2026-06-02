@@ -9,7 +9,23 @@ import torch
 from matplotlib.animation import FFMpegWriter, PillowWriter
 from matplotlib.colors import BoundaryNorm, ListedColormap
 
-from idisc.models._sam3_common import IMAGENET_MEAN, IMAGENET_STD
+from idisc.models._sam3_common import (IMAGENET_MEAN, IMAGENET_STD,
+                                        letterbox_geometry)
+
+
+def content_box(orig_hw, H: int, W: int, size: int = 1008):
+    """Pixel slice (top, left, h, w) of the real-content band inside an (H, W)
+    letterboxed-square display, for a KITTI image of original shape `orig_hw`.
+    KITTI is wide, so the square has large top/bottom padding; this is the same
+    geometry the model crops its prediction with (`letterbox_geometry`)."""
+    ft, fl, fh, fw = letterbox_geometry(orig_hw, size)
+    return round(ft * H), round(fl * W), max(1, round(fh * H)), max(1, round(fw * W))
+
+
+def crop_to_content(arr, orig_hw, size: int = 1008):
+    """Crop a letterboxed-square array (H, W[, C]) back to the KITTI content band."""
+    t, l, h, w = content_box(orig_hw, arr.shape[0], arr.shape[1], size)
+    return arr[t:t + h, l:l + w]
 
 ISD_LABELS = {
     "linear_proj": "SAM3 IDR assignment",

@@ -71,10 +71,15 @@ def _run_clip(model, images, depths, masks, capture,
                 print(f"  t={t} res{res_idx + 1}: max_prob={max_prob:.4f}  "
                       f"entropy={entropy:.3f}  N_IDR={attn.shape[-1]}")
 
+            gt_arr = gt[0,0].cpu().float().numpy()
+            pred_arr = pred[0,0].cpu().float().numpy()
+            abs_diff = np.where((gt_arr != 0), np.abs(pred_arr - gt_arr), -1)
+
             frames.append({
                 "image": denormalize_to_float01_hwc(frame[0]),
                 "depth": pred[0, 0].cpu().float().numpy(),
                 "gt": gt[0, 0].cpu().float().numpy(),
+                'diff': abs_diff, 
                 "clip_idx": clip_idx,
                 "seq_id": seq_id,
                 "isd_attn": {k: v.clone() for k, v in capture.isd_attn.items()},
@@ -84,7 +89,7 @@ def _run_clip(model, images, depths, masks, capture,
 
 
 def _make_axes():
-    fig, axes = plt.subplots(2, 3, figsize=(21, 7), constrained_layout=True)
+    fig, axes = plt.subplots(2, 4, figsize=(21, 7), constrained_layout=True)
     for ax in axes.flat:
         ax.axis("off")
     return fig, axes
@@ -104,6 +109,13 @@ def _init_images(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, isd_label
         np.ma.masked_equal(fd["gt"], 0), cmap=cmap_depth, vmin=0, vmax=depth_max,
     )
 
+    cmap_error = plt.get_cmap("coolwarm").copy()
+    cmap_error.set_bad(color="#444444")
+    axes[0, 3].set_title("Error map", fontsize=12)
+    im_diff = axes[0, 3].imshow(
+        np.ma.masked_equal(fd["diff"], -1), cmap=cmap_error, vmin=0, vmax=0.5,
+    )
+
     im_asgns = []
     for col in range(3):
         if col in asgns:
@@ -115,7 +127,7 @@ def _init_images(axes, fd, num_heads, depth_max, num_idrs, cmap_depth, isd_label
                 kwargs["vmin"] = vmin_idr
                 kwargs["vmax"] = vmax_idr
             im_asgns.append(axes[1, col].imshow(asgns[col], **kwargs))
-    return {"rgb": im_rgb, "depth": im_d, "gt": im_gt, "asgns": im_asgns}
+    return {"rgb": im_rgb, "depth": im_d, "gt": im_gt, "asgns": im_asgns, "diff": im_diff}
 
 
 def _update_images(handles, fd, num_heads, soft):
@@ -123,6 +135,7 @@ def _update_images(handles, fd, num_heads, soft):
     handles["rgb"].set_data(fd["image"])
     handles["depth"].set_data(fd["depth"])
     handles["gt"].set_data(np.ma.masked_equal(fd["gt"], 0))
+    handles["diff"].set_data(np.ma.masked_equal(fd["diff"], -1))
     for col, im in enumerate(handles["asgns"]):
         im.set_data(asgns[col])
 
@@ -143,6 +156,8 @@ def _save_frame_png(fd, num_heads, depth_max, num_idrs, model_tag, isd_label, so
                            depth_cmap(), isd_label, soft)
     fig.colorbar(handles["depth"], ax=axes[0, 2], location="right",
                  shrink=0.9, label="depth (m)")
+    fig.colorbar(handles["diff"], ax=axes[0, 3], location="right",
+                 shrink=0.9, label="abs. error (m)")
     _add_idr_colorbar(fig, axes, handles["asgns"], num_idrs, soft)
     fig.suptitle(
         f"clip {fd.get('clip_idx', '')}  {fd.get('seq_id', '')}\n{model_tag}",
@@ -160,6 +175,8 @@ def _save_gif(frames_data, num_heads, depth_max, num_idrs,
                            depth_cmap(), isd_label, soft)
     fig.colorbar(handles["depth"], ax=axes[0, 2], location="right",
                  shrink=0.9, label="depth (m)")
+    fig.colorbar(handles["diff"], ax=axes[0, 3], location="right",
+                 shrink=0.9, label="abs. error (m)")
     _add_idr_colorbar(fig, axes, handles["asgns"], num_idrs, soft)
     sup = fig.suptitle(
         f"clip {fd0.get('clip_idx', '')}  {fd0.get('seq_id', '')}  "

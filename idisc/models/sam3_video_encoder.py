@@ -49,6 +49,9 @@ class Sam3VideoPixelEncoder(nn.Module):
             load_from_HF = sam_checkpoint is None
         self.video_model = build_sam3_video_model(
             checkpoint_path=sam_checkpoint if not load_from_HF else None,
+            # Use the plain video tracker (cross-frame memory propagation) and
+            # skip the long-video instance-disambiguation heuristics, which
+            # suppress objects on the short clips used here.
             apply_temporal_disambiguation=False,
         ).eval()
         # model_builder bakes in a 15-frame hotstart suppression that hides

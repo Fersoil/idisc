@@ -113,7 +113,10 @@ class IDisc(nn.Module):
 
         idrs = None
         if sam_mode == "mask_pool":
-            assert self.context_adapter is None
+            assert self.context_adapter is None, (
+                "mask_pool feeds masks straight to ISD and must not build a "
+                "context_adapter (that is the mask_adapter path)"
+            )
             assert encoder_masks is not None, "sam_mode='mask_pool' requires encoder masks"
             outs = self.isd(fpn_outputs, masks=encoder_masks)
         else:

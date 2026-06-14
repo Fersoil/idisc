@@ -288,7 +288,10 @@ class Sam3PixelEncoder(nn.Module):
             )
             return [mem_map], queries
         fpn_raw = state["backbone_out"]["backbone_fpn"]
-        assert len(fpn_raw) >= n_levels
+        assert len(fpn_raw) >= n_levels, (
+            f"SAM3 backbone returned {len(fpn_raw)} FPN levels but the head needs "
+            f"{n_levels}"
+        )
         return [t.float() for t in list(fpn_raw)[:n_levels]], queries
 
     def forward(self, image: torch.Tensor):

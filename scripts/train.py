@@ -214,7 +214,7 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
     print(f"  Trainable params: {trainable:,} / {total:,} "
           f"({100*trainable/total:.1f}%)", flush=True)
 
-    dataset_cls = "KITTISequenceDataset" if dataset_mode == "video" else "KITTIDataset"
+    dataset_cls = custom_dataset.select_dataset_cls(cfg.get("dataset_name"), dataset_mode)
     data_path = os.path.join(cfg["paths"]["base_path"], cfg["data"]["data_root"])
     print(f"Loading data from {data_path} (dataset_cls={dataset_cls})...", flush=True)
     common_kwargs = dict(

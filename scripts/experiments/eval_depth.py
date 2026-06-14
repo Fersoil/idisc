@@ -42,7 +42,7 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
     print(f"Loaded checkpoint: {checkpoint_path}", flush=True)
     model.eval()
 
-    dataset_cls = "KITTISequenceDataset" if dataset_mode == "video" else "KITTIDataset"
+    dataset_cls = custom_dataset.select_dataset_cls(cfg.get("dataset_name"), dataset_mode)
     data_path = os.path.join(cfg["paths"]["base_path"], cfg["data"]["data_root"])
     valid_dataset = getattr(custom_dataset, dataset_cls)(
         test_mode=True,

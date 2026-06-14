@@ -10,6 +10,7 @@ Top-level `IDisc` model. Composes pixel_encoder → pixel_decoder → AFP/IDR �
 `IDisc.build(config)` is the canonical constructor — do not call __init__ directly.
 """
 
+import os
 import warnings
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
@@ -24,6 +25,40 @@ from idisc.models.fpn_decoder import BasePixelDecoder
 from idisc.models.id_module import AFP, ContextAdapter, ISD, mask_pool_centers
 
 SAM3_D_MODEL = 256
+
+
+_IDR_SWAP_DONOR: list = []  # fixed foreign IDRs for the cross-scene swap probe
+
+
+def _ablate_idrs(idrs):
+    """Diagnostic knock-out of the IDR path before ISD, selected by env IDR_ABLATE
+    (default off), to measure how load-bearing the discretization is:
+      off     identity (no change)
+      zero    replace the IDRs with a constant, so depth must come from the FPN path
+      swap    transplant a fixed foreign scene's IDRs (the first frame's) onto every
+              later frame, to test whether the specific partition matters
+      shuffle no-op: ISD reads the IDRs by cross-attention, which is permutation-
+              invariant over the token set
+    """
+    mode = os.environ.get("IDR_ABLATE", "off")
+    if mode == "off" or idrs is None:
+        return idrs
+    if mode == "swap":
+        global _IDR_SWAP_DONOR
+        if not _IDR_SWAP_DONOR:  # first frame is the donor; it runs unchanged
+            _IDR_SWAP_DONOR = [t.detach().clone() for t in idrs]
+            return idrs
+        return tuple(d if d.shape == t.shape else t
+                     for d, t in zip(_IDR_SWAP_DONOR, idrs))
+    out = []
+    for t in idrs:
+        if mode == "zero":
+            out.append(torch.zeros_like(t))
+        elif mode == "shuffle":
+            out.append(t[:, torch.randperm(t.shape[1], device=t.device), :])
+        else:
+            raise ValueError(f"unknown IDR_ABLATE={mode!r}")
+    return tuple(out)
 
 
 class IDisc(nn.Module):
@@ -123,6 +158,7 @@ class IDisc(nn.Module):
                 # are on equal footing (same projection, same head).
                 centers = mask_pool_centers(encoder_masks, decoder_outputs[-1])
                 idrs = tuple(proj(centers) for proj in self.sam3_proj)
+                idrs = _ablate_idrs(idrs)
                 outs = self.isd(fpn_outputs, idrs)
             elif sam_mode == "mask_adapter":
                 # Learnable mask-grounded discretization: tokens seeded from
@@ -150,6 +186,7 @@ class IDisc(nn.Module):
                     idrs = tuple(proj(iq) for proj in self.sam3_proj)
             else:
                 idrs = self.afp(decoder_outputs)
+            idrs = _ablate_idrs(idrs)
             outs = self.isd(fpn_outputs, idrs)
 
         out_lst = []

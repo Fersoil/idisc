@@ -177,7 +177,7 @@ class AFP(nn.Module):
         self.pixel_dim = pixel_dim
         self.eps = eps
 
-        bottlenck_dim = expansion * latent_dim
+        bottleneck_dim = expansion * latent_dim
         for i in range(self.num_resolutions):
             setattr(
                 self,
@@ -212,9 +212,9 @@ class AFP(nn.Module):
                     f"mlp_cross_{i+1}_d{1}",
                     nn.Sequential(
                         get_norm(norm, latent_dim),
-                        nn.Linear(latent_dim, bottlenck_dim),
+                        nn.Linear(latent_dim, bottleneck_dim),
                         _get_activation_cls(activation),
-                        nn.Linear(bottlenck_dim, latent_dim),
+                        nn.Linear(bottleneck_dim, latent_dim),
                     ),
                 )
 

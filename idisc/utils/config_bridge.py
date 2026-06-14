@@ -25,7 +25,7 @@ from omegaconf import DictConfig, OmegaConf
 _VALID_TASKS = {"train", "eval"}
 _VALID_DATASET_MODES = {"image", "video"}
 _VALID_IDR_SOURCES = {"afp", "sam3"}
-_VALID_SAM_MODES = {None, "linear_proj", "adapter", "mask_pool"}
+_VALID_SAM_MODES = {None, "linear_proj", "adapter", "mask_pool", "mask_adapter", "mask_linear"}
 _VALID_PROMPT_MODES = {None, "multiclass", "singleclass"}
 _VALID_PIXEL_SOURCES = {"msda", "sam3_memory", "backbone_fpn"}
 _VALID_LORA_TARGETS = {"qkv", "proj", "fc1", "fc2"}
@@ -122,27 +122,31 @@ def _validate(runtime: dict[str, Any]) -> None:
         )
     if is_sam3_encoder and prompt_mode is None:
         raise ValueError("SAM3 encoders require method.prompt.mode to be set")
-    if prompt_mode is not None and not prompt.get("classes") and sam_mode != "mask_pool":
+    if (prompt_mode is not None and not prompt.get("classes")
+            and sam_mode not in ("mask_pool", "mask_adapter", "mask_linear")):
         raise ValueError(
             f"method.prompt.mode={prompt_mode!r} requires non-empty method.prompt.classes"
         )
 
-    if sam_mode == "mask_pool":
+    if sam_mode in ("mask_pool", "mask_adapter", "mask_linear"):
+        # mask_adapter and mask_linear share mask_pool's requirements: they consume
+        # the same SAM3 masks (mask_adapter reads them with a learnable masked-
+        # attention head, mask_linear pools centers through the linear_proj Linear).
         if idr_source != "sam3":
-            raise ValueError("method.sam_mode='mask_pool' requires method.idr_source='sam3'")
+            raise ValueError(f"method.sam_mode={sam_mode!r} requires method.idr_source='sam3'")
         if encoder_name != "sam3_image":
             raise ValueError(
-                "method.sam_mode='mask_pool' requires pixel_encoder.name='sam3_image', "
+                f"method.sam_mode={sam_mode!r} requires pixel_encoder.name='sam3_image', "
                 f"got {encoder_name!r}"
             )
         if pixel_source not in ("sam3_memory", "backbone_fpn"):
             raise ValueError(
-                "method.sam_mode='mask_pool' requires pixel_encoder.pixel_source in "
+                f"method.sam_mode={sam_mode!r} requires pixel_encoder.pixel_source in "
                 f"{{sam3_memory, backbone_fpn}}, got {pixel_source!r}"
             )
         if prompt_mode != "multiclass":
             raise ValueError(
-                "method.sam_mode='mask_pool' requires method.prompt.mode='multiclass', "
+                f"method.sam_mode={sam_mode!r} requires method.prompt.mode='multiclass', "
                 f"got {prompt_mode!r}"
             )
         trainable = runtime.get("model", {}).get("pixel_encoder", {}).get("sam3_trainable", [])

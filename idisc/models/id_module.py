@@ -3,7 +3,7 @@ Author: Luigi Piccinelli
 Licensed under the CC-BY NC 4.0 license (http://creativecommons.org/licenses/by-nc/4.0/)
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -12,6 +12,23 @@ from einops import rearrange
 
 from idisc.utils import (AttentionLayer, PositionEmbeddingSine,
                          _get_activation_cls, get_norm)
+
+
+def mask_pool_centers(masks, feature_map, eps=1e-6):
+    """Mask-weighted average pool of `feature_map` under each mask → (B, K, C).
+
+    Used to seed the mask_adapter tokens before the learnable masked
+    cross-attention refines them. `masks` are SAM3 mask logits (B, K, H, W).
+    """
+    m = torch.sigmoid(
+        F.interpolate(masks, size=feature_map.shape[-2:],
+                      mode="bilinear", align_corners=False)
+    )
+    if not masks.requires_grad:
+        m = m.detach()
+    mf = m.flatten(2)                              # (B, K, hw)
+    xf = feature_map.flatten(2).transpose(1, 2)    # (B, hw, C)
+    return (mf @ xf) / (mf.sum(-1, keepdim=True) + eps)
 
 
 class ISDHead(nn.Module):
@@ -283,11 +300,16 @@ class ContextAdapter(nn.Module):
         activation: str = "silu",
         norm: str = "torchLN",
         expansion: int = 2,
+        mask_attend: bool = True,
     ):
         super().__init__()
         self.num_resolutions = num_resolutions
         self.iters = depth
         self.dim = dim
+        # When fed a per-token support mask, restrict each token's cross-attention
+        # to its own object's pixels (learnable masked pooling). Off => the tokens
+        # cross-attend over the whole feature map (unmasked control).
+        self.mask_attend = mask_attend
         bottleneck_dim = expansion * dim
         for i in range(num_resolutions):
             setattr(
@@ -326,7 +348,10 @@ class ContextAdapter(nn.Module):
                 )
 
     def forward(
-        self, tokens: torch.Tensor, feature_maps: Tuple[torch.Tensor, ...]
+        self,
+        tokens: torch.Tensor,
+        feature_maps: Tuple[torch.Tensor, ...],
+        masks: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, ...]:
         idrs = []
         for i in range(self.num_resolutions):
@@ -334,10 +359,28 @@ class ContextAdapter(nn.Module):
             ctx = rearrange(
                 fmap + getattr(self, f"pixel_pe_{i+1}")(fmap), "b d h w -> b (h w) d"
             )
+            attn_bias = None
+            if self.mask_attend and masks is not None:
+                # Hard support mask: token k may only pool from pixels where mask k
+                # is active; the attention weights inside are learned (not a log
+                # bias, not an average). Empty masks fall back to full attention.
+                m = torch.sigmoid(
+                    F.interpolate(masks, size=fmap.shape[-2:],
+                                  mode="bilinear", align_corners=False)
+                )
+                if not masks.requires_grad:
+                    m = m.detach()
+                keep = m.flatten(2) >= 0.5               # (b, K, hw)
+                keep[keep.sum(-1) == 0] = True
+                attn_bias = torch.where(
+                    keep, 0.0, torch.tensor(-1e4)
+                ).to(ctx.dtype)
             x = tokens
             for j in range(self.iters):
                 x = x + getattr(self, f"self_attn_{i+1}_{j+1}")(x.clone())
-                x = x + getattr(self, f"cross_attn_{i+1}_{j+1}")(x.clone(), ctx)
+                x = x + getattr(self, f"cross_attn_{i+1}_{j+1}")(
+                    x.clone(), ctx, attn_bias=attn_bias
+                )
                 x = x + getattr(self, f"mlp_{i+1}_{j+1}")(x.clone())
             idrs.append(x)
         return tuple(idrs)
@@ -353,6 +396,7 @@ class ContextAdapter(nn.Module):
             num_heads=config["model"]["num_heads"],
             expansion=config["model"]["expansion"],
             activation=config["model"]["activation"],
+            mask_attend=adapter_cfg.get("mask_attend", True),
         )
 
 

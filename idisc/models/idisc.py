@@ -21,7 +21,7 @@ import torch.nn.functional as F
 
 from idisc.models.defattn_decoder import MSDeformAttnPixelDecoder
 from idisc.models.fpn_decoder import BasePixelDecoder
-from idisc.models.id_module import AFP, ContextAdapter, ISD
+from idisc.models.id_module import AFP, ContextAdapter, ISD, mask_pool_centers
 
 SAM3_D_MODEL = 256
 
@@ -80,7 +80,8 @@ class IDisc(nn.Module):
         Args:
             instance_queries: SAM3 query embeddings (K, 256) for sam_mode in
                 {linear_proj, adapter}. If None, IDRs come from AFP.
-            sam_mode: None | "linear_proj" | "adapter".
+            sam_mode: None | "linear_proj" | "adapter" | "mask_pool"
+                | "mask_adapter" | "mask_linear".
             pre_extracted_encoder_outputs: If provided, skip the pixel_encoder
                 call. Used by the video encoder training loop to avoid
                 double-running the backbone.
@@ -112,13 +113,30 @@ class IDisc(nn.Module):
         fpn_outputs = self.filter_decoder_relevant_resolutions(fpn_outputs)
 
         idrs = None
-        if sam_mode == "mask_pool":
-            assert self.context_adapter is None, (
-                "mask_pool feeds masks straight to ISD and must not build a "
-                "context_adapter (that is the mask_adapter path)"
-            )
-            assert encoder_masks is not None, "sam_mode='mask_pool' requires encoder masks"
-            outs = self.isd(fpn_outputs, masks=encoder_masks)
+        if sam_mode in ("mask_pool", "mask_adapter", "mask_linear"):
+            assert encoder_masks is not None, f"sam_mode={sam_mode!r} requires encoder masks"
+            if sam_mode == "mask_linear":
+                # Fair source-only swap vs linear_proj: mask-pooled centers through
+                # the SAME per-resolution Linear (self.sam3_proj). linear_proj feeds
+                # that Linear the raw decoder queries; mask_linear feeds it the
+                # mask-grounded centers, so only the IDR source differs and the two
+                # are on equal footing (same projection, same head).
+                centers = mask_pool_centers(encoder_masks, decoder_outputs[-1])
+                idrs = tuple(proj(centers) for proj in self.sam3_proj)
+                outs = self.isd(fpn_outputs, idrs)
+            elif sam_mode == "mask_adapter":
+                # Learnable mask-grounded discretization: tokens seeded from
+                # mask-pooled centers, then refined by the ContextAdapter's
+                # mask-restricted cross-attention and scattered back by ISD.
+                centers = mask_pool_centers(encoder_masks, decoder_outputs[-1])
+                idrs = self.context_adapter(centers, decoder_outputs, masks=encoder_masks)
+                outs = self.isd(fpn_outputs, idrs)
+            else:
+                assert self.context_adapter is None, (
+                    "plain mask_pool feeds masks straight to ISD and must not build "
+                    "a context_adapter (that is the mask_adapter path)"
+                )
+                outs = self.isd(fpn_outputs, masks=encoder_masks)
         else:
             if instance_queries is not None and instance_queries.shape[0] > 0:
                 iq = instance_queries.unsqueeze(0) if instance_queries.dim() == 2 else instance_queries
@@ -266,7 +284,8 @@ class IDisc(nn.Module):
             if extra_key in config["model"]["pixel_encoder"]:
                 config_backone[extra_key] = config["model"]["pixel_encoder"][extra_key]
         config_backone["mask_pool"] = (
-            config.get("method", {}).get("sam_mode") == "mask_pool"
+            config.get("method", {}).get("sam_mode")
+            in ("mask_pool", "mask_adapter", "mask_linear")
         )
         import importlib
 
@@ -292,7 +311,7 @@ class IDisc(nn.Module):
 
         context_adapter = (
             ContextAdapter.build(config)
-            if config.get("method", {}).get("sam_mode") == "adapter"
+            if config.get("method", {}).get("sam_mode") in ("adapter", "mask_adapter")
             else None
         )
 

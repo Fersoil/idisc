@@ -236,14 +236,18 @@ class AFP(nn.Module):
                 )
 
     def forward(
-        self, feature_maps: Tuple[torch.Tensor, ...]
+        self,
+        feature_maps: Tuple[torch.Tensor, ...],
+        return_assign: bool = False,
     ) -> Tuple[torch.Tensor, ...]:
         b, *_ = feature_maps[0].shape
         idrs = []
         feature_maps_flat = []
+        sizes = []
         for i in range(self.num_resolutions):
             # feature maps embedding pre-process
             feature_map, (h, w) = feature_maps[i], feature_maps[i].shape[-2:]
+            sizes.append((h, w))
             feature_maps_flat.append(
                 rearrange(
                     feature_map + getattr(self, f"pixel_pe_{i+1}")(feature_map),
@@ -254,16 +258,25 @@ class AFP(nn.Module):
             idrs.append(getattr(self, f"mu_{i+1}").expand(b, -1, -1))
 
         # layers
+        assigns = [None] * self.num_resolutions
         for i in range(self.num_resolutions):
-            for _ in range(self.iters):
-                # Cross attention ops
-                idrs[i] = idrs[i] + getattr(self, f"cross_attn_{i+1}_d{1}")(
-                    idrs[i].clone(), feature_maps_flat[i]
-                )
+            for t in range(self.iters):
+                if return_assign and t == self.iters - 1:
+                    update, assign = getattr(self, f"cross_attn_{i+1}_d{1}")(
+                        idrs[i].clone(), feature_maps_flat[i], return_assign=True
+                    )
+                    assigns[i] = assign.reshape(b, self.num_slots, *sizes[i])
+                else:
+                    update = getattr(self, f"cross_attn_{i+1}_d{1}")(
+                        idrs[i].clone(), feature_maps_flat[i]
+                    )
+                idrs[i] = idrs[i] + update
                 idrs[i] = idrs[i] + getattr(self, f"mlp_cross_{i+1}_d{1}")(
                     idrs[i].clone()
                 )
 
+        if return_assign:
+            return tuple(idrs), assigns
         return tuple(idrs)
 
     @classmethod

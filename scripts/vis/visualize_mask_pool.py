@@ -1,16 +1,3 @@
-"""Visualize the mask_pool discretization: SAM3's per-object masks that ISD uses
-as cluster assignment. Compares the original (frozen SAM3) masks against the
-depth-adapted masks (e2e checkpoint where the segmentation head trained under
-depth loss). Renders the per-pixel dominant-mask partition over the letterboxed
-input, so a change in the partition is visible directly.
-
-Run on a GPU node (SAM3 hardcodes CUDA). Example:
-  python scripts/utils/visualize_mask_pool.py \
-    --config output/runs/<ts>_maskpool_mem_e2e_15k_*/resolved_config.yaml \
-    --orig   output/models/maskpool_mem_frozen/best_sam_finetuned.pt \
-    --adapted output/models/maskpool_mem_e2e_15k/best_sam_finetuned.pt \
-    --n 6 --out docs/SAM2Depth/gifs_v2/mask_pool
-"""
 import argparse
 import os
 import sys
@@ -51,15 +38,10 @@ def capture_masks(model, image):
     with torch.no_grad():
         model.pixel_encoder(image.cuda())
     h.remove()
-    return cap["pm"][0]  # (K, Hm, Wm)
+    return cap["pm"][0]
 
 
 def partition(masks, size, orig_hw, min_area=64, max_slots=24):
-    """Per-pixel dominant-mask map plus two readability stats: how many masks are
-    actually active (area ≥ min_area) and the fraction of pixels any mask claims
-    (coverage). Putting these in the titles makes the dense→coarse reorganisation
-    legible without reading the prose. Cropped to the KITTI content band first, so
-    the letterbox padding does not show as a square or dilute the coverage stat."""
     prob = masks.sigmoid()
     prob = F.interpolate(prob[None], size=size, mode="bilinear", align_corners=False)[0]
     t, l, h, w = content_box(orig_hw, prob.shape[-2], prob.shape[-1])
@@ -80,15 +62,15 @@ def partition(masks, size, orig_hw, min_area=64, max_slots=24):
 def colorize(seg, n):
     rng = np.random.default_rng(0)
     palette = rng.uniform(0.25, 1.0, size=(n, 3))
-    out = np.full((*seg.shape, 3), 0.5)  # background = grey
+    out = np.full((*seg.shape, 3), 0.5)
     for k in range(n):
         out[seg == k] = palette[k]
     return out
 
 
 def lb_image(img):
-    u8 = denormalize_imagenet(img)            # uint8 0..255
-    sq = letterbox_to_square(u8, size=LB)     # uint8 square, matches encoder
+    u8 = denormalize_imagenet(img)
+    sq = letterbox_to_square(u8, size=LB)
     return sq.permute(1, 2, 0).cpu().numpy()
 
 
@@ -122,7 +104,7 @@ def main():
         orig_hw = tuple(img.shape[-2:])
         square = lb_image(img)
         size = square.shape[:2]
-        rgb = crop_to_content(square, orig_hw)   # KITTI band, not the padded square
+        rgb = crop_to_content(square, orig_hw)
         masks_o = capture_masks(m_orig, img.unsqueeze(0))
         masks_a = capture_masks(m_adapt, img.unsqueeze(0))
         seg_o, na_o, cov_o = partition(masks_o, size, orig_hw)

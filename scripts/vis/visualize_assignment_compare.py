@@ -1,13 +1,3 @@
-"""Compare the per-pixel discretization assignment across the three sam3_memory
-5k configs: linear_proj, adapter (ISD cross-attention over SAM3 query IDRs) vs.
-mask_pool (mask-derived assignment). For each pixel we measure how *concentrated*
-the assignment over the K cluster slots is (max weight + normalized entropy):
-high concentration = the model commits each pixel to a cluster (uses the
-discretization); near-uniform = the IDR path is bypassed (depth comes from the FPN).
-
-Runs one model at a time (3 SAM3 backbones do not co-fit in 16 GB), caches the
-maps on CPU, then renders a combined figure per image. GPU node required.
-"""
 import argparse
 import os
 import sys
@@ -31,7 +21,7 @@ from idisc.models.idisc import IDisc
 LB = 1008
 
 
-def concentration(assign):  # assign: (hw, K) rows sum to 1 -> (maxw, norm_entropy) per pixel
+def concentration(assign):
     maxw = assign.max(-1).values
     ent = -(assign.clamp_min(1e-9) * assign.clamp_min(1e-9).log()).sum(-1)
     ent = ent / np.log(assign.shape[-1])
@@ -64,11 +54,11 @@ def run_model(cfg_file, ckpt, sam_mode, imgs):
                 hw = max(cap.isd_hw.values(), key=lambda t: t[0] * t[1])
                 m = torch.sigmoid(F.interpolate(seg["pm"][None], size=hw,
                                   mode="bilinear", align_corners=False))[0]
-                mf = m.flatten(1)                              # (K, hw)
-                assign = (mf / (mf.sum(0, keepdim=True) + 1e-6)).T  # (hw, K)
+                mf = m.flatten(1)
+                assign = (mf / (mf.sum(0, keepdim=True) + 1e-6)).T
             else:
                 r = finest(cap.isd_attn)
-                assign = extract_sample(cap.isd_attn[r], nheads, 0)  # (hw, K)
+                assign = extract_sample(cap.isd_attn[r], nheads, 0)
                 hw = cap.isd_hw[r]
             maxw, ent = concentration(assign)
             out[idx] = (maxw.reshape(hw).numpy(), ent.reshape(hw).numpy())
@@ -117,11 +107,11 @@ def main():
         means[name] = float(np.mean([results[name][i][0].mean() for i in idxs]))
         print(f"  mean max-assignment-weight = {means[name]:.3f}", flush=True)
 
-    uniform = 1.0 / 200  # K=200 slots; a uniform assignment weighs 1/K per slot
+    uniform = 1.0 / 200
     for k, i in enumerate(idxs, start=1):
         orig_hw = tuple(imgs[i]["image"].shape[-2:])
         square = lb_rgb(imgs[i]["image"])
-        rgb = crop_to_content(square, orig_hw)   # KITTI band, not the padded square
+        rgb = crop_to_content(square, orig_hw)
         fig, ax = plt.subplots(1, 4, figsize=(22, 2.6))
         ax[0].imshow(rgb); ax[0].set_title("input")
         for j, (name, *_ ) in enumerate(runs):
@@ -133,7 +123,6 @@ def main():
             ax[j + 1].set_title(f"{name} ({means[name] / uniform:.0f}×)")
         for a in ax:
             a.axis("off")
-        # one shared bar across the three method panels: same scale → directly comparable
         cb = fig.colorbar(im, ax=ax[1:].tolist(), fraction=0.025, pad=0.01)
         cb.set_label("max assign weight")
         fig.suptitle("ISD per-pixel assignment concentration", fontsize=11, y=1.02)

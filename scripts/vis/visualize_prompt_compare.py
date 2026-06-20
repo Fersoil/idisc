@@ -1,17 +1,3 @@
-"""Compare the SAM3 mask partition under different text prompts: multiclass
-([vehicle, tree, road, building]) vs. no prompt (visual-only, ''). Both use the
-frozen mask_pool SAM3 head; only the text conditioning differs, so the figure
-isolates how the prompt shapes the masks ISD uses as its discretization — the
-qualitative companion to the prompt ablation (0.0893 vs 0.0885).
-
-Run on a GPU node (SAM3 hardcodes CUDA). Example:
-  python scripts/utils/visualize_prompt_compare.py \
-    --config-multiclass output/runs/<ts>_maskpool_mem_frozen_*/resolved_config.yaml \
-    --config-noprompt   output/runs/<ts>_maskpool_noprompt_frozen_*/resolved_config.yaml \
-    --ckpt-multiclass   output/models/maskpool_mem_frozen/best_sam_finetuned.pt \
-    --ckpt-noprompt     output/models/maskpool_noprompt_frozen/best_sam_finetuned.pt \
-    --n 6 --out docs/SAM2Depth/gifs_v2/prompt
-"""
 import argparse
 import os
 import sys
@@ -59,7 +45,7 @@ def main():
         orig_hw = tuple(img.shape[-2:])
         square = lb_image(img)
         size = square.shape[:2]
-        rgb = crop_to_content(square, orig_hw)   # KITTI band, not the padded square
+        rgb = crop_to_content(square, orig_hw)
         masks_m = capture_masks(m_multi, img.unsqueeze(0))
         masks_n = capture_masks(m_none, img.unsqueeze(0))
         seg_m, na_m, cov_m = partition(masks_m, size, orig_hw)

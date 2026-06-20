@@ -1,14 +1,4 @@
 #!/usr/bin/env python
-"""Visualize SAM3 video tracker masklets over KITTI sequences.
-
-Requires Sam3VideoPixelEncoder (is_video_encoder=True) whose forward() fills
-encoder._masklets_per_frame when encoder.track_masklets=True.
-
-Layout per frame:
-  row 0:  [RGB | masklet ID assignment | top-K overlay (frame-0 IDs locked)]
-  row 1:  [ISD dominant IDR — res 1 | res 2 | res 3]
-  row 2+: [masklet 0 | masklet 1 | ... ]   top-K by score in frame 0
-"""
 
 import argparse
 import os
@@ -38,11 +28,10 @@ from _viz_common import (
 from idisc.dataloders.kitti_sequence import KITTISequenceDataset
 from idisc.models.idisc import IDisc
 
-TOP_K_MASKLETS = 6   # overridden by --num-masklets at runtime
+TOP_K_MASKLETS = 6
 
 
 def _id_cmap(unique_ids: np.ndarray):
-    """Stable per-ID colormap so colors persist across frames."""
     id_to_idx = {int(i): k for k, i in enumerate(unique_ids.tolist())}
     base = plt.get_cmap("tab20").colors
     colors = [base[k % 20] for k in range(len(unique_ids))]
@@ -88,7 +77,6 @@ def collect_frame(mask_info: dict, img_np: np.ndarray, fixed_ids=None):
     if not top_masks:
         return None
 
-    # Assignment restricted to top_ids — colors match the overlay exactly.
     top_stack = torch.stack(top_mask_tensors, dim=0)
     top_ids_t = torch.tensor(top_ids, dtype=torch.long)
     best_k = top_stack.argmax(dim=0)

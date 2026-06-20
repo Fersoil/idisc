@@ -1,10 +1,4 @@
 #!/usr/bin/env python
-"""Visualize IDR attention maps over a KITTI sequence clip.
-
-For each clip: per-frame depth (handling both image and video encoders),
-captures AFP + ISD attention via forward hooks, saves per-frame PNGs and a
-GIF animation with [RGB | depth | ISD dominant IDR per resolution].
-"""
 
 import argparse
 import os

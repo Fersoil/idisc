@@ -13,7 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))   # append, not insert — venv packages win
+    sys.path.append(str(REPO_ROOT))
 from idisc.utils.config_bridge import build_runtime_config, save_resolved_config
 from idisc.utils.tracking import (
     finish_tracking,
@@ -75,7 +75,6 @@ def _resolve_path(value: str | None) -> str | None:
 
 @contextmanager
 def tracked_run(cfg: dict[str, Any], run_dir: Path):
-    """Clean W&B context: auto-logs errors, sets status, finishes correctly."""
     init_tracking(cfg, run_dir)
     try:
         yield

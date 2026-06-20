@@ -1,15 +1,4 @@
 #!/usr/bin/env python
-"""Per-IDR attention grids from the AFP and ISD cross-attention layers.
-
-Runs on a single frame (frame 0 of each clip in the sequence manifest) and, for each
-FPN resolution, saves: an AFP grid showing where every IDR latent attends, and an ISD
-dominant-IDR-per-pixel map. Hooks each AttentionLayer's dropout sub-module to capture
-the (B*H, N, K) attention matrix without touching model code. PNGs go to --output-dir.
-
-Note: in `replace` mode the AFP is bypassed, so AFP grids only appear for the AFP
-baseline; SAM3 models still yield the ISD map. The video encoder is not supported here
-(use visualize_sequence.py).
-"""
 
 import argparse
 import os
@@ -131,8 +120,6 @@ def run_visualization(cfg: dict) -> None:
         print("note: replace mode bypasses AFP, so only ISD attention is captured "
               "(AFP grids appear for the AFP baseline only).")
 
-    # Single frame per clip, drawn from the same sequence manifest the other
-    # viz scripts use, so this runs against the current resolved configs.
     clip_length = cfg.get("clip_length") or config["data"].get("clip_length", 4)
     manifest = (cfg.get("manifest_path") or
                 config["data"].get("manifest_path", "splits/kitti/sequence_manifest.json"))
@@ -157,8 +144,6 @@ def run_visualization(cfg: dict) -> None:
             seq_id = clip["sequence_id"].replace("/", "_")
             capture.reset()
 
-            # For SAM3 encoders, run the backbone once and pass pre-extracted
-            # outputs to avoid a second backbone call inside model().
             if yields_iq:
                 *fpn, instance_queries = model.pixel_encoder(image)
                 pre_extracted = model.invert_encoder_output_order(tuple(fpn))

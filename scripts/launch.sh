@@ -1,15 +1,4 @@
 #!/bin/bash
-# SLURM launcher. Invoke directly, not via sbatch; wraps your overrides into an
-# sbatch call with the right account, time, and GPU constraint for the chosen
-# experiment. Experiment names are the files in conf/experiment/.
-#
-# Usage:
-#   ./scripts/launch.sh experiment=<name> [hydra_overrides...] [--name TAG]
-#
-# Examples:
-#   ./scripts/launch.sh experiment=eval_idisc_kitti_image
-#   ./scripts/launch.sh experiment=finetune_sam3_kitti_linear_mem --name ablation1
-#   ./scripts/launch.sh experiment=finetune_idisc_kitti_video_temporal finetune.temporal.weight=0.1
 set -euo pipefail
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -65,8 +54,6 @@ else
   source /work/courses/3dv/team17/idisc/.venv/bin/activate
 fi
 export CUDA_HOME=\$(dirname \"\$(dirname \"\$(which nvcc)\")\")
-# sam3 is an installed venv package (see requirements.txt), not a source dir on
-# the path; PYTHONPATH only needs the repo root for the idisc/scripts imports.
 export PYTHONPATH='${IDISC_REPO}:\${PYTHONPATH:-}'
 cd '${IDISC_REPO}'
 ${INNER_CMD}"

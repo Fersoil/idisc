@@ -16,7 +16,6 @@ VAL_SHARDS = [f"data/val-{i:06d}.tar" for i in range(2)]
 
 
 def export_shard(shard, out_dir, rel_prefix, split_lines, start_idx, limit):
-    """Download one shard, write its samples, delete it. Returns new running index."""
     scratch = os.path.join(out_dir, "_shard_tmp")
     os.makedirs(scratch, exist_ok=True)
     path = hf_hub_download(REPO, shard, repo_type="dataset",
@@ -29,8 +28,8 @@ def export_shard(shard, out_dir, rel_prefix, split_lines, start_idx, limit):
             if limit is not None and idx >= limit:
                 break
             with h5py.File(io.BytesIO(tar.extractfile(member).read()), "r") as h5:
-                rgb = np.asarray(h5["rgb"][()])        # (3, H, W) uint8
-                depth = np.asarray(h5["depth"][()])    # (H, W) float32 metres
+                rgb = np.asarray(h5["rgb"][()])
+                depth = np.asarray(h5["depth"][()])
             rgb = np.transpose(rgb, (1, 2, 0))
             depth_mm = np.clip(np.rint(depth * 1000.0), 0, 65535).astype(np.uint16)
 
@@ -59,7 +58,6 @@ def main():
     os.makedirs(train_dir, exist_ok=True)
     os.makedirs(test_dir, exist_ok=True)
 
-    # Val (test) split: export in full for comparable metrics.
     if args.skip_val:
         print("Skipping val export (--skip-val)", flush=True)
     else:
@@ -71,7 +69,6 @@ def main():
             f.write("\n".join(test_lines) + "\n")
         print(f"TEST: {n} samples", flush=True)
 
-    # Train split: capped subset.
     train_lines = []
     n = 0
     for shard in TRAIN_SHARDS:

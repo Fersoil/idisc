@@ -41,12 +41,12 @@ configured, so that setup does not need to be repeated for every run.
 
 ```bash
 # train / eval — the full list of experiment keys is in ARCHITECTURE.md
-./scripts/launch.sh experiment=finetune_sam3_image
-./scripts/launch.sh experiment=eval_idisc_image
-./scripts/launch.sh experiment=finetune_sam3_video finetune.n_iters=500   # quick shakedown
+./scripts/launch.sh experiment=finetune_sam3_kitti_linear_mem
+./scripts/launch.sh experiment=eval_idisc_kitti_image
+./scripts/launch.sh experiment=finetune_sam3_kitti_video finetune.n_iters=500   # quick shakedown
 
 # regenerate the visualization GIFs (one GPU, ~5 min)
-sbatch scripts/utils/visualize_all.sh        # writes to output/runs/viz/*
+sbatch scripts/vis/visualize_all.sh        # writes to output/runs/viz/*
 ```
 
 Every run writes its artifacts to `output/runs/<timestamp>_<exp_id>_<sha>/` (the

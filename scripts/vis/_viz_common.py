@@ -1,4 +1,3 @@
-"""Shared helpers for the visualize_* scripts."""
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
@@ -14,36 +13,28 @@ from idisc.models._sam3_common import (IMAGENET_MEAN, IMAGENET_STD,
 
 
 def content_box(orig_hw, H: int, W: int, size: int = 1008):
-    """Pixel slice (top, left, h, w) of the real-content band inside an (H, W)
-    letterboxed-square display, for a KITTI image of original shape `orig_hw`.
-    KITTI is wide, so the square has large top/bottom padding; this is the same
-    geometry the model crops its prediction with (`letterbox_geometry`)."""
     ft, fl, fh, fw = letterbox_geometry(orig_hw, size)
     return round(ft * H), round(fl * W), max(1, round(fh * H)), max(1, round(fw * W))
 
 
 def crop_to_content(arr, orig_hw, size: int = 1008):
-    """Crop a letterboxed-square array (H, W[, C]) back to the KITTI content band."""
     t, l, h, w = content_box(orig_hw, arr.shape[0], arr.shape[1], size)
     return arr[t:t + h, l:l + w]
 
 ISD_LABELS = {
     "linear_proj": "SAM3 IDR assignment",
-    "replace": "SAM3 IDR assignment",  # legacy alias of linear_proj
+    "replace": "SAM3 IDR assignment",
 }
-# "replace" kept for viz of historical run snapshots (renamed to linear_proj).
 SAM_MODE_CHOICES = ["linear_proj", "replace"]
 
 
 def denormalize_to_float01_hwc(img_tensor: torch.Tensor) -> np.ndarray:
-    """ImageNet-normalised CHW tensor → HxWx3 float in [0, 1] for imshow."""
     mean = IMAGENET_MEAN.to(img_tensor.device)
     std = IMAGENET_STD.to(img_tensor.device)
     return (img_tensor * std + mean).clamp(0, 1).permute(1, 2, 0).cpu().float().numpy()
 
 
 def make_writer(fmt: str, fps: int):
-    """matplotlib animation writer for gif / mp4."""
     if fmt == "mp4":
         import shutil
         if shutil.which("ffmpeg") is None:
@@ -60,7 +51,6 @@ def make_writer(fmt: str, fps: int):
 
 
 class AttentionCapture:
-    """Collect AFP and ISD cross-attention maps without touching model code."""
 
     def __init__(self, model) -> None:
         self.afp_attn: Dict[int, torch.Tensor] = {}
@@ -77,8 +67,6 @@ class AttentionCapture:
 
         self._handles.append(model.afp.register_forward_pre_hook(_afp_pre))
 
-        # AFP attention: cross_attn_{i+1}_d1 is called `iters` times — the
-        # hook overwrites, so we keep the last iteration.
         for i in range(model.afp.num_resolutions):
             ca = getattr(model.afp, f"cross_attn_{i+1}_d1")
 
@@ -121,22 +109,16 @@ class AttentionCapture:
 def extract_sample(
     attn_bh: torch.Tensor, num_heads: int, sample_idx: int
 ) -> torch.Tensor:
-    """(B*H, N, K) → (B, H, N, K), select sample, mean over heads → (N, K)."""
     B = attn_bh.shape[0] // num_heads
     attn = attn_bh.view(B, num_heads, *attn_bh.shape[1:])
     return attn[sample_idx].mean(0).float()
 
 
 def to_spatial(flat: torch.Tensor, h: int, w: int) -> torch.Tensor:
-    """(N, H*W) → (N, H, W)."""
     return flat.reshape(flat.shape[0], h, w)
 
 
 def isd_assignments(fd: dict, num_heads: int, soft: bool = False) -> Dict[int, np.ndarray]:
-    """Per-resolution dominant-IDR maps (or weighted-mean if soft=True).
-
-    soft=True is stable across frames: split attention shows as a blend
-    rather than flickering between two IDR indices."""
     out: Dict[int, np.ndarray] = {}
     for res_idx, attn_bh in fd["isd_attn"].items():
         h, w = fd["isd_hw"][res_idx]
@@ -150,7 +132,6 @@ def isd_assignments(fd: dict, num_heads: int, soft: bool = False) -> Dict[int, n
 
 
 def idr_display(num_idrs: int, soft: bool):
-    """(cmap, norm_or_None, vmin, vmax) for an ISD assignment panel."""
     if soft:
         return plt.get_cmap("viridis"), None, 0.0, float(num_idrs - 1)
     base = plt.get_cmap("tab20").colors
@@ -161,13 +142,11 @@ def idr_display(num_idrs: int, soft: bool):
 
 
 def slot_cmap(n: int):
-    """Discrete tab20-based (cmap, norm) for `n` slot indices."""
     cmap, norm, _, _ = idr_display(n, soft=False)
     return cmap, norm
 
 
 def depth_cmap():
-    """plasma with grey for masked / missing-GT pixels."""
     cmap = plt.get_cmap("plasma").copy()
     cmap.set_bad(color="#444444")
     return cmap

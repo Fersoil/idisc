@@ -1,14 +1,4 @@
 #!/usr/bin/env python
-"""Visualize SAM3 mask predictions per sequence frame.
-
-Captures pred_masks / pred_logits by patching sam_model.forward_grounding
-on the instance (register_forward_hook doesn't fire because the processor
-calls forward_grounding directly).
-
-Layout per frame (1 + ceil(K/3) rows × 3 cols):
-  row 0:  [RGB | SAM3 slot assignment | top-score mask overlay]
-  row 1+: [query 0 mask | query 1 mask | ... ]   highest-score slots
-"""
 
 import argparse
 import os
@@ -39,12 +29,8 @@ TOP_K_MASKS = 6
 
 
 class Sam3Capture:
-    """Patch sam_model.forward_grounding to capture pred_masks / pred_logits."""
 
     def __init__(self, encoder):
-        # One queue entry per forward_grounding call. Image encoder: one
-        # call per model() forward (reset before each frame). Video
-        # encoder: T calls during pixel_encoder(clip) — pop per frame.
         self._queue: list = []
         sam_model = encoder.sam_model
         orig_fg = sam_model.forward_grounding
@@ -74,13 +60,9 @@ class Sam3Capture:
 
 
 def _collect_frame(entry, img_hw, sam_mode="replace", fixed_slots=None):
-    """Arrays for one frame at full image resolution.
-
-    fixed_slots: if provided, always show these slot indices (locked from frame 0).
-    """
     H, W = img_hw
-    masks = entry.get("masks")    # (Q, H_low, W_low)
-    logits = entry.get("logits")  # (Q, C)
+    masks = entry.get("masks")
+    logits = entry.get("logits")
     if masks is None:
         return None
 
@@ -89,8 +71,6 @@ def _collect_frame(entry, img_hw, sam_mode="replace", fixed_slots=None):
         masks.unsqueeze(0), size=(H, W), mode="bilinear", align_corners=False,
     ).squeeze(0)
 
-    # SAM3 may return probabilities [0,1] or raw logits; apply sigmoid only
-    # when values are clearly logits (outside [0,1]).
     if masks_up.min() < -0.1 or masks_up.max() > 1.1:
         probs = masks_up.sigmoid()
     else:
@@ -213,7 +193,6 @@ def _run_clip(model, capture, images, depths, masks, clip_idx, seq_id, sam_mode)
 
     with torch.no_grad():
         if encoder_is_video:
-            # forward_grounding is called T times inside pixel_encoder(images).
             capture.reset()
             enc_out = model.pixel_encoder(images)
             fpn_levels = enc_out[:-1]

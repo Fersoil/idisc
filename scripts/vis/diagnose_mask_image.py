@@ -1,8 +1,3 @@
-"""Deep-dive one image: compare original (frozen SAM3) vs depth-adapted (e2e)
-masks beyond the argmax partition — per-pixel max mask probability (confidence),
-mask coverage, number of active masks, and the sorted per-mask peak-confidence
-curve. Distinguishes "masks flattened / merged" from "masks fragmented".
-"""
 import argparse
 import os
 import sys
@@ -39,25 +34,24 @@ def masks_for(model, image):
     with torch.no_grad():
         model.pixel_encoder(image.cuda())
     h.remove()
-    return cap["pm"]  # (K, Hm, Wm)
+    return cap["pm"]
 
 
 def stats(masks, size, orig_hw):
     prob = masks.sigmoid()
     up = F.interpolate(prob[None], size=size, mode="bilinear", align_corners=False)[0]
     t, l, h, w = content_box(orig_hw, up.shape[-2], up.shape[-1])
-    up = up[:, t:t + h, l:l + w]                       # crop to KITTI band, not the square
+    up = up[:, t:t + h, l:l + w]
     maxp, arg = up.max(0)
     seg = torch.where(maxp > 0.5, arg, torch.full_like(arg, -1)).numpy()
-    seg_full = arg.numpy()  # pure argmax, every pixel assigned (no threshold)
-    per_peak = prob.flatten(1).max(1).values            # (K,) peak confidence/mask
-    per_area = (prob > 0.5).flatten(1).sum(1)            # (K,) area/mask
+    seg_full = arg.numpy()
+    per_peak = prob.flatten(1).max(1).values
+    per_area = (prob > 0.5).flatten(1).sum(1)
     active = per_area > 64
 
-    # filtered argmax: drop the silent outlier masks, then local majority (mode) filter
     act_idx = torch.where(active)[0]
     pa = up[act_idx] if len(act_idx) else up
-    seg_a = pa.argmax(0)                                 # (H,W) over active masks
+    seg_a = pa.argmax(0)
     oh = F.one_hot(seg_a, pa.shape[0]).permute(2, 0, 1).float()
     vote = F.avg_pool2d(oh[None], 9, stride=1, padding=4)[0]
     seg_clean = vote.argmax(0).numpy()
@@ -99,7 +93,7 @@ def main():
     orig_hw = tuple(img.shape[-2:])
     square = letterbox_to_square(denormalize_imagenet(img), size=LB).permute(1, 2, 0).cpu().numpy()
     size = square.shape[:2]
-    rgb = crop_to_content(square, orig_hw)   # KITTI band, not the padded square
+    rgb = crop_to_content(square, orig_hw)
 
     res = {}
     for tag, ckpt in [("original", args.orig), ("adapted", args.adapted)]:

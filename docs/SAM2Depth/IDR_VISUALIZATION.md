@@ -119,7 +119,7 @@ SAM3 image, ISD dominant-IDR per pixel (res 2):
 ## Reproduction
 
 ```bash
-sbatch scripts/utils/visualize_all.sh        # writes GIFs under output/runs/viz/*
+sbatch scripts/vis/visualize_all.sh        # writes GIFs under output/runs/viz/*
 ```
 
 ### Checkpoints and configs
@@ -148,28 +148,28 @@ AFP-only baseline ignores it and shows AFP IDRs).
 
 ```bash
 # IDR maps over a clip (depth + ISD dominant-IDR per FPN resolution)
-python scripts/utils/visualize_sequence.py \
+python scripts/vis/visualize_sequence.py \
   --config-file <run>/resolved_config.yaml --model-file <ckpt.pt> \
   --base-path /work/courses/3dv/team17/idisc \
   --output-dir output/runs/viz/seq --sam-mode replace \
   --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
 # SAM3 image-encoder slot assignments + top-K mask overlays (SAM3 image config)
-python scripts/utils/visualize_sam3.py \
+python scripts/vis/visualize_sam3.py \
   --config-file <sam3-image-run>/resolved_config.yaml --model-file <ckpt.pt> \
   --base-path /work/courses/3dv/team17/idisc \
   --output-dir output/runs/viz/sam3_masks --sam-mode replace \
   --start-clip 50 --num-clips 3 --clip-length 4 --fps 1
 
 # SAM3 video tracker masklets (SAM3 video config). --det-thresh 0.0 keeps all detections
-python scripts/utils/visualize_sam3_masklets.py \
+python scripts/vis/visualize_sam3_masklets.py \
   --config-file <sam3-video-run>/resolved_config.yaml --model-file <ckpt.pt> \
   --base-path /work/courses/3dv/team17/idisc \
   --output-dir output/runs/viz/masklets --sam-mode replace \
   --start-clip 50 --num-clips 3 --clip-length 4 --fps 1 --num-masklets 9 --det-thresh 0.0
 
 # Per-IDR attention grids on a single frame (AFP baseline / SAM3 image config)
-python scripts/utils/visualize_experiments.py \
+python scripts/vis/visualize_experiments.py \
   --config-file <run>/resolved_config.yaml --model-file <ckpt.pt> \
   --base-path /work/courses/3dv/team17/idisc \
   --output-dir output/runs/viz/attn --sam-mode replace \

@@ -36,20 +36,21 @@ GPU constraint, CUDA module, and venv already set. Run it directly, not through 
 ./scripts/launch.sh experiment=<name> [hydra.overrides...] [--name TAG]
 ```
 
+Naming: `{task}_{backbone}_{dataset}_{mode}`.
+
 | `experiment=` | What | Notes |
 |---------------|------|-------|
-| `eval_idisc_image` | Released iDisc-R101 eval, single-frame | no training, ~1 h slot |
-| `eval_idisc_video` | Released iDisc-R101 eval, 4-frame clips | no training |
-| `finetune_idisc_image` | iDisc-R101 finetune, single-frame | AFP baseline |
-| `finetune_idisc_video` | iDisc-R101 finetune, 4-frame clips | AFP baseline |
-| `finetune_sam3_image` | Frozen SAM3 image encoder + iDisc | `replace` by default |
-| `finetune_sam3_video` | Frozen SAM3 video encoder + iDisc | needs a 16 GB GPU (`--constraint=5060ti`) |
+| `eval_idisc_kitti_image` / `eval_idisc_kitti_video` | Released iDisc-R101 eval | no training |
+| `finetune_idisc_{kitti,nyu}_image` | iDisc-R101 finetune, single-frame | AFP baseline |
+| `finetune_idisc_kitti_video[_temporal]` | iDisc-R101 4-frame clips | AFP baseline / + temporal loss |
+| `finetune_sam3_{kitti,nyu}_<idr>_<pixel>[_frozen]` | Frozen SAM3 image encoder + iDisc | idr∈{linear,adapter,mask_linear,mask_pool}, pixel∈{mem,msda} |
+| `finetune_sam3_kitti_video` | Frozen SAM3 video encoder + iDisc | needs a 16 GB GPU (`--constraint=5060ti`) |
 
-Override examples:
+Examples (one config per variant — no axis overrides):
 ```bash
-./scripts/launch.sh experiment=finetune_sam3_image finetune.n_iters=500       # quick shakedown
-./scripts/launch.sh experiment=finetune_sam3_image method.sam_mode=translate  # translate mode
-./scripts/launch.sh experiment=finetune_sam3_image --name ablation1
+./scripts/launch.sh experiment=finetune_sam3_kitti_linear_mem finetune.n_iters=500  # quick shakedown
+./scripts/launch.sh experiment=finetune_sam3_kitti_adapter_mem --name ablation1
+./scripts/launch.sh experiment=finetune_sam3_kitti_mask_pool_mem_frozen
 ```
 
 Each run produces `output/runs/<timestamp>_<exp_id>_<git_sha>/` (holding

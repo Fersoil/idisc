@@ -44,8 +44,6 @@ class Sam3TrackModule(nn.Module):
 
     @torch.no_grad()
     def forward(self, clip_norm: torch.Tensor) -> torch.Tensor:
-        # clip_norm (T,3,H,W) ImageNet-normalised -> labels (T,H,W) long, tracked
-        # instance id per pixel (0 = background), ids consistent across frames.
         T, _, H, W = clip_norm.shape
         u8 = denormalize_imagenet(clip_norm)
         pil = [Image.fromarray(u8[t].permute(1, 2, 0).cpu().numpy()) for t in range(T)]

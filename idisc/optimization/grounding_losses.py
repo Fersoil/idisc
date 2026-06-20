@@ -4,8 +4,6 @@ import torch
 def temporal_smoothness_loss(
     depth: torch.Tensor, labels: torch.Tensor, eps: float = 1e-6
 ) -> torch.Tensor:
-    # depth (T,1,H,W) or (T,H,W); labels (T,H,W) long, instance id per pixel (0 = bg).
-    # Mean squared log-Laplacian of each tracked object's mask-pooled depth over the clip.
     if depth.dim() == 4:
         depth = depth[:, 0]
     T = depth.shape[0]

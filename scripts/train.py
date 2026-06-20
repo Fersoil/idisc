@@ -1,16 +1,4 @@
 #!/usr/bin/env python
-"""Training backend for iDisc (baseline AFP) and SAM3+iDisc variants.
-
-Entered from `run_with_hydra.py` after `build_runtime_config` has validated
-the schema. Two execution paths share a single per-frame inner loop:
-
-  - encoder=resnet101 (idr_source=afp)  → standard image dataloader, AFP IDRs.
-  - encoder=sam3_image (idr_source=sam3) → SAM3 produces queries per frame;
-        the linear_proj or adapter path consumes them; sequences get flattened.
-  - encoder=sam3_video (idr_source=sam3) → FPN+queries pre-extracted per clip,
-        then per-frame depth-head forward (avoids re-running the backbone).
-"""
-
 import os
 import random
 from time import time
@@ -44,8 +32,6 @@ _DTYPE_MAP = {
 
 
 def _flatten_sequence_batch(batch, device):
-    """Flatten (B, T, ...) sequence batches into (B*T, ...) so the per-frame
-    training/validation loop handles both sequence and single-frame datasets."""
     images = batch["images"].to(device)
     B, T = images.shape[:2]
     data = images.view(B * T, *images.shape[2:])
@@ -179,8 +165,6 @@ def _run_validation(model, valid_loader, context, device, sam_mode,
 
 
 def _set_trainable(model, encoder_name):
-    """Freeze the (frozen) SAM3 backbone but keep iDisc-side modules trainable.
-    For the resnet101 baseline this is a no-op — everything trains."""
     for p in model.parameters():
         p.requires_grad = True
     if encoder_name.startswith("sam3"):
@@ -209,8 +193,6 @@ def _set_trainable(model, encoder_name):
 
 
 def _trainable_state_dict(model, encoder_name):
-    """Drop frozen SAM3 weights from checkpoints — they're reloaded from
-    sam_checkpoint at startup; persisting them per-save bloats ckpt ~16x."""
     sd = model.state_dict()
     if encoder_name.startswith("sam3"):
         trainable_names = {n for n, p in model.named_parameters() if p.requires_grad}
@@ -340,8 +322,6 @@ def _train_batch(model, batch, device, context, sam_mode,
         return None
     total = 0.0
     for idx in range(n_samples):
-        # Sequence datasets zero-fill GT for frames without LiDAR; SILog over
-        # zero valid pixels is NaN and poisons training.
         if mask[idx].bool().sum() == 0:
             continue
         with context:

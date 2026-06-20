@@ -8,14 +8,12 @@ from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, SequentialSampler
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-import idisc.dataloders as custom_dataset
-from idisc.models.idisc import IDisc
+from scripts.experiments._eval_common import build_eval_model, build_val_loader
 from idisc.models.sam3_masks import crop_letterbox_to_frame
 
 
@@ -45,26 +43,15 @@ def run(cfg, checkpoint_path, output_dir, tau, limit):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     os.makedirs(output_dir, exist_ok=True)
 
-    model = IDisc.build(cfg).to(device)
-    model.load_pretrained(checkpoint_path)
-    model.eval()
+    model = build_eval_model(cfg, checkpoint_path, device)
     if not getattr(model.pixel_encoder, "yields_instance_masks", False):
         raise ValueError(
             f"sam_mode={cfg['method']['sam_mode']!r} does not yield SAM3 masks; "
             "region R2 needs a mask_pool/mask_linear/mask_adapter checkpoint"
         )
     letterbox_size = model.pixel_encoder.letterbox_size
-
-    dataset_cls = custom_dataset.select_dataset_cls(cfg["dataset_name"], "image")
-    data_path = os.path.join(cfg["paths"]["base_path"], cfg["data"]["data_root"])
-    dataset = getattr(custom_dataset, dataset_cls)(
-        test_mode=True, base_path=data_path, crop=cfg["data"]["crop"],
-    )
-    loader = DataLoader(
-        dataset, batch_size=1, num_workers=2,
-        sampler=SequentialSampler(dataset), pin_memory=True,
-    )
-    print(f"{len(dataset)} samples | tau={tau} | letterbox={letterbox_size}", flush=True)
+    loader = build_val_loader(cfg)
+    print(f"{len(loader)} samples | tau={tau} | letterbox={letterbox_size}", flush=True)
 
     r2s, actives = [], []
     t0 = time.time()

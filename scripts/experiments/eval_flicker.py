@@ -9,14 +9,12 @@ from pathlib import Path
 import numpy as np
 import torch
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, SequentialSampler
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-import idisc.dataloders as custom_dataset
-from idisc.models.idisc import IDisc
+from scripts.experiments._eval_common import build_eval_model, build_val_loader
 from idisc.models.sam3_track import Sam3TrackModule
 from idisc.optimization.grounding_losses import temporal_smoothness_loss
 
@@ -29,27 +27,14 @@ def run(cfg, checkpoint_path, output_dir, limit):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     os.makedirs(output_dir, exist_ok=True)
 
-    model = IDisc.build(cfg).to(device)
-    model.load_pretrained(checkpoint_path)
-    model.eval()
+    model = build_eval_model(cfg, checkpoint_path, device)
     track = Sam3TrackModule(
         sam_checkpoint=tcfg["sam_checkpoint"],
         prompt_classes=tcfg["prompt"]["classes"],
         confidence_threshold=tcfg["confidence_threshold"],
     ).to(device)
-
-    dataset_cls = custom_dataset.select_dataset_cls(cfg["dataset_name"], "video")
-    data_path = os.path.join(cfg["paths"]["base_path"], cfg["data"]["data_root"])
-    dataset = getattr(custom_dataset, dataset_cls)(
-        test_mode=True, base_path=data_path,
-        manifest_path=cfg["data"]["manifest_path"],
-        clip_length=cfg["data"]["clip_length"], crop=cfg["data"]["crop"],
-    )
-    loader = DataLoader(
-        dataset, batch_size=1, num_workers=2,
-        sampler=SequentialSampler(dataset), pin_memory=True,
-    )
-    print(f"{len(dataset)} clips | classes={tcfg['prompt']['classes']}", flush=True)
+    loader = build_val_loader(cfg)
+    print(f"{len(loader)} clips | classes={tcfg['prompt']['classes']}", flush=True)
 
     flick = []
     t0 = time.time()

@@ -1,12 +1,4 @@
 #!/usr/bin/env python
-"""Standalone depth evaluation.
-
-Loads a resolved Hydra config (the one saved as `resolved_config.yaml` inside
-a run directory) and a checkpoint, then runs validation on the configured
-val dataset. Used when you want metrics on a saved checkpoint outside of
-the training loop.
-"""
-
 import argparse
 import json
 import os
@@ -16,14 +8,12 @@ from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, SequentialSampler
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-import idisc.dataloders as custom_dataset
-from idisc.models.idisc import IDisc
+from scripts.experiments._eval_common import build_eval_model, build_val_loader
 from idisc.utils import DICT_METRICS_DEPTH, RunningMetric
 
 
@@ -37,26 +27,10 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
     os.makedirs(output_dir, exist_ok=True)
     print(f"Device: {device} | encoder={encoder_name} | sam_mode={sam_mode}", flush=True)
 
-    model = IDisc.build(cfg).to(device)
-    model.load_pretrained(checkpoint_path)
+    model = build_eval_model(cfg, checkpoint_path, device)
     print(f"Loaded checkpoint: {checkpoint_path}", flush=True)
-    model.eval()
-
-    dataset_cls = custom_dataset.select_dataset_cls(cfg.get("dataset_name"), dataset_mode)
-    data_path = os.path.join(cfg["paths"]["base_path"], cfg["data"]["data_root"])
-    valid_dataset = getattr(custom_dataset, dataset_cls)(
-        test_mode=True,
-        base_path=data_path,
-        crop=cfg["data"].get("crop"),
-        manifest_path=cfg["data"].get("manifest_path"),
-        clip_length=cfg["data"].get("clip_length", 4),
-        stride=cfg["data"].get("stride"),
-    )
-    valid_loader = DataLoader(
-        valid_dataset, batch_size=1, num_workers=2,
-        sampler=SequentialSampler(valid_dataset), pin_memory=True,
-    )
-    print(f"{len(valid_dataset)} samples.", flush=True)
+    valid_loader = build_val_loader(cfg)
+    print(f"{len(valid_loader)} samples.", flush=True)
 
     tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
     t0 = time.time()

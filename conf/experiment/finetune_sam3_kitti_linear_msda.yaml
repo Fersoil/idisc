@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_sam3_image
+  - override /finetune: image
+
+run:
+  exp_id: finetune-sam3-kitti-linear-msda
+  task: train
+  dataset_mode: image
+
+method:
+  idr_source: sam3
+  sam_mode: linear_proj
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+
+model:
+  pixel_encoder:
+    pixel_source: msda
+    sam3_trainable: [neck, encoder, decoder]
+
+tags: [finetune, sam3, kitti, image]

@@ -1,12 +1,11 @@
 # @package _global_
-# Finetune the released iDisc (resnet101 + AFP) on KITTI 4-frame sequences.
 defaults:
   - override /dataset: kitti
   - override /model: idisc_r101
   - override /finetune: video
 
 run:
-  exp_id: finetune-idisc-video
+  exp_id: finetune-idisc-kitti-video-temporal
   task: train
   dataset_mode: video
 
@@ -17,7 +16,9 @@ method:
     mode: null
     classes: []
 
-tags:
-  - idisc
-  - finetune
-  - video
+finetune:
+  temporal:
+    enabled: true
+    weight: 0.1
+
+tags: [finetune, idisc, kitti, video]

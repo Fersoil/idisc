@@ -1,23 +1,15 @@
 #!/bin/bash
-# SLURM launcher for the 5 live experiments. Invoke directly, not via sbatch;
-# this script wraps your overrides into an sbatch call with the right account,
-# time, and GPU constraint for the chosen experiment.
+# SLURM launcher. Invoke directly, not via sbatch; wraps your overrides into an
+# sbatch call with the right account, time, and GPU constraint for the chosen
+# experiment. Experiment names are the files in conf/experiment/.
 #
 # Usage:
 #   ./scripts/launch.sh experiment=<name> [hydra_overrides...] [--name TAG]
 #
-# Live experiments:
-#   eval_idisc_image        — released iDisc-R101 eval, single-frame (no training)
-#   eval_idisc_video        — released iDisc-R101 eval, 4-frame sequences (no training)
-#   finetune_idisc_image    — iDisc-R101 finetune, single-frame
-#   finetune_idisc_video    — iDisc-R101 finetune, 4-frame sequences
-#   finetune_sam3_image     — frozen SAM3 image encoder + iDisc
-#   finetune_sam3_video     — frozen SAM3 video encoder + iDisc (needs 16 GB GPU)
-#
 # Examples:
-#   ./scripts/launch.sh experiment=eval_idisc_image
-#   ./scripts/launch.sh experiment=finetune_sam3_video finetune.n_iters=100
-#   ./scripts/launch.sh experiment=finetune_sam3_image --name ablation1
+#   ./scripts/launch.sh experiment=eval_idisc_kitti_image
+#   ./scripts/launch.sh experiment=finetune_sam3_kitti_linear_mem --name ablation1
+#   ./scripts/launch.sh experiment=finetune_idisc_kitti_video_temporal finetune.temporal.weight=0.1
 set -euo pipefail
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -25,8 +17,7 @@ IDISC_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [[ $# -eq 0 ]]; then
     echo "Usage: $0 experiment=<name> [hydra overrides...] [--name TAG]" >&2
-    echo "Experiments: eval_idisc_image eval_idisc_video finetune_idisc_image finetune_idisc_video"  >&2
-    echo "             finetune_sam3_image finetune_sam3_video" >&2
+    echo "Experiments: see conf/experiment/*.yaml" >&2
     exit 1
 fi
 
@@ -46,12 +37,13 @@ done
 [[ -z "$EXPERIMENT" ]] && { echo "Missing experiment=<name>." >&2; exit 1; }
 
 case "$EXPERIMENT" in
-    eval_idisc_image)     TIME="1:00:00";  CONSTRAINT="" ;;
-    eval_idisc_video)     TIME="1:00:00";  CONSTRAINT="" ;;
-    finetune_idisc_image) TIME="4:00:00";  CONSTRAINT="" ;;
-    finetune_idisc_video) TIME="10:00:00"; CONSTRAINT="" ;;
-    finetune_sam3_image)  TIME="4:00:00";  CONSTRAINT="" ;;
-    finetune_sam3_video)  TIME="14:00:00"; CONSTRAINT="--constraint=5060ti" ;;
+    eval_*)                       TIME="1:00:00";  CONSTRAINT="" ;;
+    *video_temporal*)             TIME="14:00:00"; CONSTRAINT="--constraint=5060ti" ;;
+    finetune_idisc_*video*)       TIME="10:00:00"; CONSTRAINT="" ;;
+    finetune_sam3_*video*)        TIME="14:00:00"; CONSTRAINT="--constraint=5060ti" ;;
+    finetune_sam3_*mask_pool*)    TIME="8:00:00";  CONSTRAINT="" ;;
+    finetune_sam3_*)              TIME="4:00:00";  CONSTRAINT="" ;;
+    finetune_idisc_*)             TIME="4:00:00";  CONSTRAINT="" ;;
     *)
         echo "Unknown experiment '$EXPERIMENT'; using defaults (4h, no constraint)." >&2
         TIME="4:00:00"; CONSTRAINT=""

@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /dataset: nyu
+  - override /model: idisc_sam3_image
+  - override /finetune: image
+
+run:
+  exp_id: finetune-sam3-nyu-linear-mem
+  task: train
+  dataset_mode: image
+
+method:
+  idr_source: sam3
+  sam_mode: linear_proj
+  prompt:
+    mode: multiclass
+    classes: [furniture, wall, floor, object]
+
+model:
+  pixel_encoder:
+    pixel_source: sam3_memory
+    sam3_trainable: [neck, encoder, decoder, head]
+
+tags: [finetune, sam3, nyu, image]

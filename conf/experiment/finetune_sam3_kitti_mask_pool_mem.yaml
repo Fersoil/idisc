@@ -1,24 +1,27 @@
 # @package _global_
-# Finetune iDisc with the SAM3 image encoder. sam_mode selects the IDR source:
-# linear_proj | adapter (override via method.sam_mode=...).
 defaults:
   - override /dataset: kitti
   - override /model: idisc_sam3_image
   - override /finetune: image
 
 run:
-  exp_id: finetune-sam3-image
+  exp_id: finetune-sam3-kitti-mask-pool-mem
   task: train
   dataset_mode: image
 
 method:
   idr_source: sam3
-  sam_mode: adapter
+  sam_mode: mask_pool
   prompt:
     mode: multiclass
     classes: [vehicle, tree, road, building]
 
-tags:
-  - sam3
-  - finetune
-  - image
+model:
+  pixel_encoder:
+    pixel_source: sam3_memory
+    sam3_trainable: [neck, encoder, decoder, head]
+
+finetune:
+  n_iters: 15000
+
+tags: [finetune, sam3, kitti, image]

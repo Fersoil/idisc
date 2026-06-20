@@ -1,13 +1,11 @@
 # @package _global_
-# Finetune iDisc with the frozen SAM3 video encoder. sam_mode selects the IDR
-# source: linear_proj | adapter (override via method.sam_mode=...).
 defaults:
   - override /dataset: kitti
   - override /model: idisc_sam3_video
   - override /finetune: video
 
 run:
-  exp_id: finetune-sam3-video
+  exp_id: finetune-sam3-kitti-video
   task: train
   dataset_mode: video
 
@@ -18,7 +16,4 @@ method:
     mode: multiclass
     classes: [vehicle, tree, road, building]
 
-tags:
-  - sam3
-  - finetune
-  - video
+tags: [finetune, sam3, kitti, video]

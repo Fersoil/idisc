@@ -28,9 +28,13 @@ from torch import nn, optim
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader, SequentialSampler
 
+from torch.utils.checkpoint import checkpoint
+
 import idisc.dataloders as custom_dataset
 from idisc.models.idisc import IDisc
 from idisc.models.lora import LoRALinear
+from idisc.models.sam3_track import Sam3TrackModule
+from idisc.optimization.grounding_losses import temporal_smoothness_loss
 from idisc.utils import DICT_METRICS_DEPTH, RunningMetric, format_seconds
 from idisc.utils.tracking import log_metrics
 
@@ -159,6 +163,10 @@ def _set_trainable(model, encoder_name):
         if n_lora:
             print(f"  SAM3 trunk LoRA: {n_lora} layers trainable", flush=True)
 
+    if getattr(model, "track_module", None) is not None:
+        for p in model.track_module.parameters():
+            p.requires_grad = False
+
 
 def _trainable_state_dict(model, encoder_name):
     """Drop frozen SAM3 weights from checkpoints — they're reloaded from
@@ -170,7 +178,40 @@ def _trainable_state_dict(model, encoder_name):
         frozen = ("pixel_encoder.sam_model.", "pixel_encoder.video_model.")
         sd = {k: v for k, v in sd.items()
               if not k.startswith(frozen) or k in trainable_names}
+    if getattr(model, "track_module", None) is not None:
+        sd = {k: v for k, v in sd.items() if not k.startswith("track_module.vm.")}
     return sd
+
+
+def _validate_temporal(model, valid_loader, context, device):
+    tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
+    flick = []
+    for i, batch in enumerate(valid_loader):
+        if i >= 40:
+            break
+        images = batch["images"].to(device)
+        depths = batch["depths"].to(device)
+        masks = batch["masks"].to(device)
+        B, T = images.shape[:2]
+        for b in range(B):
+            clip = images[b]
+            labels = model.track_module(clip)
+            preds = []
+            for t in range(T):
+                with context:
+                    pred, _, _ = model(clip[t:t + 1], sam_mode=None)
+                preds.append(pred)
+                if masks[b, t].bool().sum() > 0:
+                    tracker.accumulate_metrics(
+                        depths[b, t:t + 1].permute(0, 2, 3, 1),
+                        pred.permute(0, 2, 3, 1),
+                        masks[b, t:t + 1].permute(0, 2, 3, 1),
+                    )
+            flick.append(temporal_smoothness_loss(torch.cat(preds, dim=0), labels).item())
+    metrics = tracker.get_metrics()
+    tracker.reset_metrics()
+    metrics["flicker"] = float(np.mean(flick)) if flick else 0.0
+    return metrics
 
 
 def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -188,6 +229,10 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
     val_interval = int(finetune_cfg["val_interval"])
     batch_size = int(finetune_cfg["batch_size"])
     amp_dtype = _DTYPE_MAP.get(finetune_cfg.get("amp_dtype", "bfloat16"), torch.bfloat16)
+
+    temporal_cfg = finetune_cfg.get("temporal") or {}
+    temporal_enabled = bool(temporal_cfg.get("enabled", False))
+    temporal_weight = float(temporal_cfg.get("weight", 0.0))
 
     seed = cfg["generic"]["seed"]
     random.seed(seed)
@@ -208,6 +253,13 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
         print("  iDisc loaded (pretrained weights).", flush=True)
     else:
         print("  iDisc built from scratch (SAM3 backbone frozen).", flush=True)
+    if temporal_enabled:
+        model.track_module = Sam3TrackModule(
+            sam_checkpoint=temporal_cfg["sam_checkpoint"],
+            prompt_classes=temporal_cfg["prompt"]["classes"],
+            confidence_threshold=temporal_cfg["confidence_threshold"],
+        ).to(device)
+        print(f"  Temporal tracker side-branch attached (weight={temporal_weight}).", flush=True)
     _set_trainable(model, encoder_name)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -283,7 +335,46 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
             total_loss = 0.0
             valid_frames = 0
 
-            if encoder_is_video and "images" in batch:
+            if temporal_enabled and "images" in batch:
+                images = batch["images"].to(device)
+                depths = batch["depths"].to(device)
+                masks = batch["masks"].to(device)
+                B, T = images.shape[:2]
+                valid_frames = int(masks.bool().any(dim=(2, 3, 4)).sum().item())
+                if valid_frames == 0:
+                    continue
+                for b in range(B):
+                    clip = images[b]
+                    if temporal_weight > 0:
+                        labels = model.track_module(clip)
+                        torch.cuda.empty_cache()
+                        preds, silog = [], 0.0
+                        for t in range(T):
+                            valid = masks[b, t].bool().sum() > 0
+                            with context:
+                                pred = checkpoint(lambda f: model(f, sam_mode=None)[0],
+                                                  clip[t:t + 1], use_reentrant=False)
+                                if valid:
+                                    silog = silog + model.loss.weight * model.loss(
+                                        pred, target=depths[b, t:t + 1],
+                                        mask=masks[b, t:t + 1].bool(), interpolate=True)
+                            preds.append(pred)
+                        l_temp = temporal_smoothness_loss(torch.cat(preds, dim=0), labels)
+                        loss = silog / valid_frames + temporal_weight * l_temp
+                        loss.backward()
+                        total_loss += loss.item()
+                    else:
+                        for t in range(T):
+                            if masks[b, t].bool().sum() == 0:
+                                continue
+                            with context:
+                                _, losses, _ = model(clip[t:t + 1], gt=depths[b, t:t + 1],
+                                                     mask=masks[b, t:t + 1])
+                                loss = sum(v for v in losses["opt"].values())
+                            (loss / valid_frames).backward()
+                            total_loss += loss.item()
+                total_loss /= valid_frames
+            elif encoder_is_video and "images" in batch:
                 images = batch["images"].to(device)
                 depths = batch["depths"].to(device)
                 masks = batch["masks"].to(device)
@@ -372,7 +463,9 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
                 print(f"\n  Validation at step {step}...", flush=True)
                 model.eval()
                 with torch.no_grad():
-                    if dataset_mode == "video" and encoder_is_video:
+                    if temporal_enabled:
+                        metrics = _validate_temporal(model, valid_loader, context, device)
+                    elif dataset_mode == "video" and encoder_is_video:
                         metrics = _validate_video(model, valid_loader, context, device, sam_mode)
                     else:
                         metrics = _validate_image(model, valid_loader, context, device, sam_mode)

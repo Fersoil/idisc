@@ -79,8 +79,6 @@ IDisc.forward(image, instance_queries, sam_mode)
   └── ISD(fpn, IDRs) ─────────────────► depth map (B, 1, H, W)
 ```
 
-![](gifs/architecture.png)
-
 `sam_mode` only matters when SAM3 queries are present. The plain iDisc baseline always
 takes the AFP path (the `instance_queries is None` branch in `idisc/models/idisc.py`,
 `forward`).

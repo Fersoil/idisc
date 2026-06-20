@@ -25,13 +25,11 @@ IDRs. In practice the FPNs are used for almost all of the depth signal.
 | Doc | What's in it |
 |-----|--------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | how the model is wired together, the key files, the data flow, the Hydra config setup, and how to add an experiment |
-| [IDR_VISUALIZATION.md](IDR_VISUALIZATION.md) | the IDR / depth / mask GIFs comparing the baseline against SAM3 |
 
-Older notes, kept for reference:
-[legacy_setup.md](legacy_setup.md) (cluster environment setup),
-[legacy_SAM3_EXPERIMENTS.md](legacy_SAM3_EXPERIMENTS.md) (live-inference run log, E11–E14),
-[legacy_SAM3_EXPERIMENTS_cached.md](legacy_SAM3_EXPERIMENTS_cached.md) (earlier cached-query runs),
-[legacy_EXPERIMENTS.md](legacy_EXPERIMENTS.md) (E1–E10, the early hypothesis).
+Older experiment notes, archived under [legacy/](legacy/):
+`legacy_setup.md` (cluster environment setup),
+`experiments.md` / `IDR_VISUALIZATION.md` (experiment log and IDR/mask viz),
+`legacy_SAM3_EXPERIMENTS.md`, `legacy_SAM3_EXPERIMENTS_cached.md`, `legacy_EXPERIMENTS.md` (E1–E20 run logs).
 
 ## Quickstart
 
@@ -65,5 +63,5 @@ scripts/train.py          training loop (run_train)
 scripts/experiments/      eval_depth.py (run_eval)
 scripts/utils/            visualize_sequence.py, visualize_sam3.py, visualize_sam3_masklets.py, visualize_all.sh
 output/runs/, output/models/   per-run artifacts and checkpoints
-docs/SAM2Depth/           this documentation + gifs/
+docs/SAM2Depth/           this documentation (legacy/ holds archived experiment notes)
 ```

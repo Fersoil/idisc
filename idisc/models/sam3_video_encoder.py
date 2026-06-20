@@ -1,8 +1,3 @@
-"""SAM3 video encoder used as iDisc pixel_encoder.
-
-Runs the detector on frame 0 with text prompts, then propagates detections
-to frames 1..T-1 via the tracker. Returns `(*per_frame_fpn, per_frame_queries)`.
-"""
 from __future__ import annotations
 
 import contextlib
@@ -49,13 +44,8 @@ class Sam3VideoPixelEncoder(nn.Module):
             load_from_HF = sam_checkpoint is None
         self.video_model = build_sam3_video_model(
             checkpoint_path=sam_checkpoint if not load_from_HF else None,
-            # Use the plain video tracker (cross-frame memory propagation) and
-            # skip the long-video instance-disambiguation heuristics, which
-            # suppress objects on the short clips used here.
             apply_temporal_disambiguation=False,
         ).eval()
-        # model_builder bakes in a 15-frame hotstart suppression that hides
-        # every object on short clips; disable it and override thresholds.
         self.video_model.new_det_thresh = confidence_threshold
         self.video_model.score_threshold_detection = confidence_threshold
         self.video_model.hotstart_delay = 0
@@ -74,13 +64,9 @@ class Sam3VideoPixelEncoder(nn.Module):
         self._decoder_handle = None
         self._last_hs: Optional[torch.Tensor] = None
 
-        # Visualization opt-in: when True, forward() fills _masklets_per_frame.
         self.track_masklets: bool = False
         self._masklets_per_frame: List[Optional[dict]] = []
 
-        # Inject cached backbone_out via _get_img_feats — the single
-        # consumer-side hook every SAM3 FPN path funnels through (patching
-        # backbone.forward_image misses the vl_combiner bypass).
         self._cached_bb_out: Optional[dict] = None
         detector = self.video_model.detector
         original_get_img_feats = detector._get_img_feats
@@ -94,7 +80,6 @@ class Sam3VideoPixelEncoder(nn.Module):
         detector._get_img_feats = _patched
 
     def _ensure_decoder_hook(self):
-        # Registered lazily so the closure binds the post-deepcopy self.
         if self._decoder_handle is None:
             self._decoder_handle = install_decoder_hook(
                 self.video_model.detector.transformer.decoder,
@@ -150,7 +135,7 @@ class Sam3VideoPixelEncoder(nn.Module):
                         feat, size=target_sizes[lvl_i],
                         mode="bilinear", align_corners=False,
                     )
-                fpn_per_level.append(feat)  # (T, C, h, w)
+                fpn_per_level.append(feat)
 
             self.video_model.add_prompt(
                 state, frame_idx=0, text_str=" . ".join(self.prompt_classes)
@@ -168,8 +153,6 @@ class Sam3VideoPixelEncoder(nn.Module):
         self._cached_bb_out = None
         torch.cuda.empty_cache()
 
-        # Tracked-only frames (no fresh detection) may skip the decoder hook;
-        # pad those with zeros so all frames share K.
         nonzero = [q for q in per_frame_queries if q is not None]
         assert nonzero, "decoder hook did not fire on any frame"
         K = nonzero[0].shape[0]

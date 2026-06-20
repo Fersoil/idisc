@@ -1,4 +1,3 @@
-"""Shared helpers for the SAM3 image + video pixel encoders."""
 from typing import Callable, List, Tuple
 
 import numpy as np
@@ -23,14 +22,12 @@ def coerce_prompt_classes(prompt_classes) -> List[str]:
 
 
 def denormalize_imagenet(image: torch.Tensor) -> torch.Tensor:
-    """ImageNet-normalised float → uint8 RGB at 0..255."""
     mean = IMAGENET_MEAN.to(image.device, image.dtype)
     std = IMAGENET_STD.to(image.device, image.dtype)
     return ((image * std + mean) * 255.0).clamp(0, 255).to(torch.uint8)
 
 
 def target_level_sizes(hw: Tuple[int, int], n_levels: int) -> List[Tuple[int, int]]:
-    """Stride-4/8/16/... pyramid sizes for the iDisc FPN."""
     h, w = int(hw[0]), int(hw[1])
     return [
         (max(1, h // (2 ** (2 + i))), max(1, w // (2 ** (2 + i))))
@@ -41,9 +38,6 @@ def target_level_sizes(hw: Tuple[int, int], n_levels: int) -> List[Tuple[int, in
 def letterbox_to_square(
     img: torch.Tensor, size: int = 1008, pad_value: int = 128
 ) -> torch.Tensor:
-    """Aspect-preserving resize of a (C, H, W) uint8 image into a size x size
-    square (scale long side to `size`, pad the short side), avoiding the
-    processor's anisotropic squish. pad_value=128 maps to ~0 after normalisation."""
     c, h, w = img.shape
     scale = size / max(h, w)
     new_h, new_w = max(1, round(h * scale)), max(1, round(w * scale))
@@ -61,9 +55,6 @@ def letterbox_to_square(
 def letterbox_geometry(
     hw: Tuple[int, int], size: int = 1008
 ) -> Tuple[float, float, float, float]:
-    """Inverse of letterbox_to_square: (frac_top, frac_left, frac_h, frac_w) of
-    the square occupied by real content for an image of shape `hw`. Resolution-
-    independent, so it applies to any downstream feature/prediction map."""
     h, w = int(hw[0]), int(hw[1])
     scale = size / max(h, w)
     new_h, new_w = max(1, round(h * scale)), max(1, round(w * scale))
@@ -72,16 +63,12 @@ def letterbox_geometry(
 
 
 def infer_num_levels(backbone) -> int:
-    """FPN level count = neck convs minus the SAM3 `scalp` (discarded top levels)."""
     convs = backbone.vision_backbone.convs
     scalp = int(getattr(backbone, "scalp", 0) or 0)
     return max(1, len(convs) - scalp)
 
 
 def install_decoder_hook(decoder, sink: Callable[[torch.Tensor], None]):
-    """Hook a SAM3 transformer decoder so `sink(hs)` is called with the
-    last-layer per-slot tokens (shape (K, 256)) on every fire. Returns the
-    handle so the caller can `.remove()` it."""
 
     def _hook(module, args, output):
         for o in (output if isinstance(output, tuple) else (output,)):
@@ -96,9 +83,6 @@ def install_decoder_hook(decoder, sink: Callable[[torch.Tensor], None]):
 
 
 def install_encoder_hook(encoder, sink: Callable[[dict], None]):
-    """Hook the SAM3 fusion encoder so `sink(out)` gets its output dict
-    ({"memory", "spatial_shapes", "level_start_index", ...}) on every fire.
-    Returns the handle."""
 
     def _hook(module, args, output):
         if isinstance(output, dict) and "memory" in output:

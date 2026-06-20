@@ -1,19 +1,3 @@
-"""Validate and resolve the Hydra-composed config into a plain dict.
-
-Schema (enforced here):
-  run.task          in {"train", "eval"}
-  run.dataset_mode  in {"image", "video"}
-  method.idr_source in {"afp", "sam3"}
-  method.sam_mode   in {None, "linear_proj", "adapter"}; must be None iff idr_source == "afp"
-                    (legacy "replace" is accepted and normalized to "linear_proj")
-  method.prompt.mode in {None, "multiclass", "singleclass"};
-                      must be non-None iff a SAM3 pixel_encoder is configured;
-                      when non-None, method.prompt.classes must be non-empty.
-
-The single source of truth for prompt_mode / prompt_classes is method.prompt;
-those values are mirrored into model.pixel_encoder so the encoder factory
-keeps reading from its own config block.
-"""
 
 import warnings
 from pathlib import Path
@@ -55,9 +39,6 @@ def _validate(runtime: dict[str, Any]) -> None:
 
     method = runtime.get("method", {})
     idr_source = method.get("idr_source")
-    # Back-compat: "replace" was renamed to "linear_proj" (it is a Linear
-    # projection of the SAM3 queries). Normalize so retired configs / old run
-    # snapshots keep validating.
     if method.get("sam_mode") == "replace":
         warnings.warn(
             "method.sam_mode='replace' is deprecated; use 'linear_proj'.",
@@ -129,9 +110,6 @@ def _validate(runtime: dict[str, Any]) -> None:
         )
 
     if sam_mode in ("mask_pool", "mask_adapter", "mask_linear"):
-        # mask_adapter and mask_linear share mask_pool's requirements: they consume
-        # the same SAM3 masks (mask_adapter reads them with a learnable masked-
-        # attention head, mask_linear pools centers through the linear_proj Linear).
         if idr_source != "sam3":
             raise ValueError(f"method.sam_mode={sam_mode!r} requires method.idr_source='sam3'")
         if encoder_name != "sam3_image":
@@ -168,13 +146,11 @@ def build_runtime_config(
     prompt_mode = prompt.get("mode")
     prompt_classes = list(prompt.get("classes") or [])
 
-    # Mirror prompt config into pixel_encoder so the encoder factory finds it.
     encoder_cfg = runtime.setdefault("model", {}).setdefault("pixel_encoder", {})
     if encoder_cfg.get("name", "").startswith("sam3"):
         encoder_cfg["prompt_mode"] = prompt_mode
         encoder_cfg["prompt_classes"] = prompt_classes
 
-    # Convenience top-level pointer used by callers that don't want to dig.
     runtime["prompt_mode"] = prompt_mode
 
     return runtime

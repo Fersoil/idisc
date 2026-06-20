@@ -1,12 +1,3 @@
-"""Frozen SAM3 instance masks as a side-branch for grounding iDisc's AFP clustering.
-
-SAM3 stays frozen and outside the autograd graph: it consumes the un-normalised
-(augmented) image and returns per-object mask logits in the iDisc image frame, used by
-a grounding loss as a soft co-membership target. GPU-only — SAM3 hardcodes CUDA in its
-position encoding. The forward runs under no_grad (not inference_mode, whose tensors
-cannot re-enter an autograd-tracked loss) and reads the raw `pred_masks` logits, not the
-processor's sigmoided/resized output.
-"""
 
 from typing import List, Optional, Tuple
 
@@ -21,8 +12,6 @@ from idisc.models._sam3_common import letterbox_geometry, letterbox_to_square
 def crop_letterbox_to_frame(
     maps: torch.Tensor, hw: Tuple[int, int], size: int = 1008
 ) -> torch.Tensor:
-    """Crop the content band out of (B, C, H_m, W_m) letterbox-frame maps and resize to
-    the original `hw` — the inverse of letterbox_to_square at map resolution."""
     ft, fl, fh, fw = letterbox_geometry(hw, size)
     h_m, w_m = maps.shape[-2:]
     top, left = round(ft * h_m), round(fl * w_m)
@@ -45,7 +34,6 @@ class Sam3MaskModule(nn.Module):
 
         if load_from_HF is None:
             load_from_HF = sam_checkpoint is None
-        # SAM3 hardcodes CUDA in its position encoding; build on GPU directly.
         self.sam_model = build_sam3_image_model(
             device="cuda" if torch.cuda.is_available() else "cpu",
             checkpoint_path=sam_checkpoint,
@@ -59,9 +47,6 @@ class Sam3MaskModule(nn.Module):
         self._proc_device = None
 
     def train(self, mode: bool = True):
-        # Keep the frozen SAM3 in eval even when the parent model is in train mode: in
-        # train mode forward_grounding takes a target-matching branch (find_target=None
-        # -> crash), and SAM3 is never trained anyway.
         super().train(mode)
         self.sam_model.eval()
         return self
@@ -94,13 +79,12 @@ class Sam3MaskModule(nn.Module):
                 find_target=None,
                 geometric_prompt=self.sam_model._get_dummy_prompt(),
             )
-        logits = out["pred_masks"][0].float()           # (Q, h_m, w_m) raw logits
+        logits = out["pred_masks"][0].float()
         if logits.dim() == 4:
             logits = logits.squeeze(1)
         return crop_letterbox_to_frame(logits.unsqueeze(0), hw, self.letterbox_size)[0]
 
     def forward(self, image_raw: torch.Tensor) -> torch.Tensor:
-        """image_raw: (B, 3, H, W) uint8 -> (B, Q, H, W) float mask logits."""
         self._ensure_processor(image_raw.device)
         hw = tuple(image_raw.shape[-2:])
         masks = [self._run_one(image_raw[b], hw) for b in range(image_raw.shape[0])]

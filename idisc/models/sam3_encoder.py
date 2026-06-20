@@ -1,8 +1,3 @@
-"""SAM3 image encoder used as iDisc pixel_encoder.
-
-Returns `(*fpn_levels, instance_queries)`; IDisc.forward peels off the
-trailing queries when `yields_instance_queries=True`.
-"""
 from typing import List, Optional, Sequence
 
 import torch
@@ -24,10 +19,6 @@ from idisc.models.lora import LoRALinear, inject_lora
 
 
 def _patch_addmm_act_for_grad():
-    """SAM3's fused ``addmm_act`` raises when grad is enabled (it detaches weights
-    for an inference fast-path). When we run the trunk with grad for LoRA, fall
-    back to the plain ``act(linear(x))`` it stands in for. Idempotent; the frozen
-    path (grad disabled) still hits the original fused op."""
     import sam3.model.vitdet as vitdet
 
     if getattr(vitdet.addmm_act, "_grad_aware", False):
@@ -76,7 +67,6 @@ class Sam3PixelEncoder(nn.Module):
 
         if load_from_HF is None:
             load_from_HF = sam_checkpoint is None
-        # SAM3 hardcodes CUDA in its position encoding; build on GPU directly.
         self.sam_model = build_sam3_image_model(
             device="cuda" if torch.cuda.is_available() else "cpu",
             checkpoint_path=sam_checkpoint,
@@ -91,7 +81,6 @@ class Sam3PixelEncoder(nn.Module):
         for part in self.sam3_trainable:
             self._sam3_submodule(part).requires_grad_(True)
 
-        # LoRA on the otherwise-frozen ViT trunk. 
         lora = lora or {}
         self._lora = bool(lora.get("enabled", False))
         if self._lora:
@@ -177,8 +166,6 @@ class Sam3PixelEncoder(nn.Module):
         self._last_level_start_index = out["level_start_index"]
 
     def _memory_map(self, mem, shapes, starts) -> torch.Tensor:
-        # (sum_hw, B, 256) -> (B, 256, h, w) for the finest level; reshape only.
-        # mem keeps grad on the grad-grounding path, so do not detach here.
         mem = mem.float()
         hw = [(int(h), int(w)) for h, w in shapes]
         fi = max(range(len(hw)), key=lambda i: hw[i][0] * hw[i][1])
@@ -263,8 +250,6 @@ class Sam3PixelEncoder(nn.Module):
         ):
             state = self._proc.set_image(raw_image)
             if self.prompt_mode == "singleclass":
-                # The language path can short-circuit and skip the hook on
-                # some prompts; drop those silently.
                 per_class = []
                 for cls in self.prompt_classes:
                     self._last_hs = None
@@ -332,6 +317,4 @@ class Sam3PixelEncoder(nn.Module):
         return (*feats, instance_out)
 
     def output_crop_geometry(self, original_shape):
-        # Content-band fractions of the letterboxed square; IDisc.forward crops
-        # the prediction to this band before resizing to the original geometry.
         return letterbox_geometry(original_shape, size=self.letterbox_size)

@@ -366,34 +366,22 @@ class ContextAdapter(nn.Module):
         feature_maps: Tuple[torch.Tensor, ...],
         masks: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, ...]:
+        if self.mask_attend and masks is not None:
+            raise NotImplementedError(
+                "mask-restricted adapter attention (mask_attend) needs an "
+                "AttentionLayer that accepts attn_bias; upstream iDisc's "
+                "AttentionLayer does not, so the mask_adapter path is unsupported"
+            )
         idrs = []
         for i in range(self.num_resolutions):
             fmap = feature_maps[i]
             ctx = rearrange(
                 fmap + getattr(self, f"pixel_pe_{i+1}")(fmap), "b d h w -> b (h w) d"
             )
-            attn_bias = None
-            if self.mask_attend and masks is not None:
-                # Hard support mask: token k may only pool from pixels where mask k
-                # is active; the attention weights inside are learned (not a log
-                # bias, not an average). Empty masks fall back to full attention.
-                m = torch.sigmoid(
-                    F.interpolate(masks, size=fmap.shape[-2:],
-                                  mode="bilinear", align_corners=False)
-                )
-                if not masks.requires_grad:
-                    m = m.detach()
-                keep = m.flatten(2) >= 0.5               # (b, K, hw)
-                keep[keep.sum(-1) == 0] = True
-                attn_bias = torch.where(
-                    keep, 0.0, torch.tensor(-1e4)
-                ).to(ctx.dtype)
             x = tokens
             for j in range(self.iters):
                 x = x + getattr(self, f"self_attn_{i+1}_{j+1}")(x.clone())
-                x = x + getattr(self, f"cross_attn_{i+1}_{j+1}")(
-                    x.clone(), ctx, attn_bias=attn_bias
-                )
+                x = x + getattr(self, f"cross_attn_{i+1}_{j+1}")(x.clone(), ctx)
                 x = x + getattr(self, f"mlp_{i+1}_{j+1}")(x.clone())
             idrs.append(x)
         return tuple(idrs)

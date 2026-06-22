@@ -1,4 +1,4 @@
-> **This fork extends iDisc with SAM3-guided depth estimation.** A frozen SAM3 backbone replaces the ResNet/Swin pixel encoder, and SAM3 decoder queries are routed into iDisc's internal representations (`replace` / `translate` modes). Experiments are managed via Hydra. See **[docs/SAM2Depth/README.md](./docs/SAM2Depth/README.md)** for an overview, results, and links to the architecture, experiment log, and visualization docs; [legacy/legacy_setup.md](./docs/SAM2Depth/legacy/legacy_setup.md) covers environment setup.
+> **This fork extends iDisc with SAM3-guided depth estimation.** Experiments are managed via Hydra. See **[docs/SAM2Depth/README.md](./docs/SAM2Depth/README.md)** for an overview and results.
 
 ---
 

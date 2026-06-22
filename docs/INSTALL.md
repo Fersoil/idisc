@@ -17,10 +17,11 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 # alternatively you can also try installing with
 # pip install -r requirements-lock.txt
 
-git clone https://github.com/facebookresearch/sam3.git
-pip install -e ./sam3
+git clone https://github.com/facebookresearch/sam3.git sam3-repo
+pip install -e ./sam3-repo
 pip install -r requirements.txt
 export PYTHONPATH="$PWD:$PYTHONPATH"
+
 ```
 
 ## 2. Deformable-attention op

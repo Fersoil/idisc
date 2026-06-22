@@ -1,7 +1,7 @@
 # Installation
 
-End-to-end setup for the SAM3 + iDisc fork. The ResNet-101 baseline runs with steps
-1–3 only; the SAM3 experiments additionally need step 4.
+End-to-end setup for the SAM3 + iDisc fork. The ResNet-101 baseline needs steps 1–3;
+the SAM3 experiments additionally need the SAM3 checkpoint (step 4).
 
 ## Prerequisites
 
@@ -12,7 +12,11 @@ End-to-end setup for the SAM3 + iDisc fork. The ResNet-101 baseline runs with st
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # or requirements-lock.txt for the exact pinned env
+# PyTorch + torchvision first, matching your CUDA (we used CUDA 12.8):
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# SAM3 from source (requirements.txt lists `sam3`, which is not on PyPI):
+pip install -e /path/to/sam3
+pip install -r requirements-lock.txt
 export PYTHONPATH="$PWD:$PYTHONPATH"
 ```
 
@@ -28,17 +32,12 @@ Download the released iDisc weights from the
 [iDisc model zoo](https://github.com/SysCV/idisc) (`kitti_resnet101.pt`, `nyu_resnet101.pt`)
 and point `paths.pretrained_model` at them (see step 5).
 
-## 4. SAM3 (for the SAM3 experiments)
+## 4. SAM3 checkpoint (for the SAM3 experiments)
 
-SAM3 is **not on PyPI**; install it from Meta's source release and download its checkpoint.
-
-```bash
-pip install -e /path/to/sam3            # Meta AI SAM3 source (https://github.com/facebookresearch/sam3)
-```
-
-Then place the SAM3 checkpoint (`sam3.pt`) anywhere and point `paths.sam_checkpoint` at it.
-SAM3 is loaded via `sam3.model_builder` (`build_sam3_image_model` / `build_sam3_video_model`);
-verify with `python -c "import sam3; print(sam3.__version__)"`.
+The SAM3 package is installed in step 1. Download the SAM3 backbone checkpoint (`sam3.pt`)
+from [Meta AI SAM3](https://github.com/facebookresearch/sam3), place it anywhere, and point
+`paths.sam_checkpoint` at it (step 5). Verify the package with
+`python -c "import sam3; print(sam3.__version__)"`.
 
 ## 5. Data and paths
 

@@ -5,7 +5,7 @@ The project fork replaces iDisc's ResNet/Swin pixel encoder with a frozen SAM3 b
 is the depth signal in iDisc's internal discretization (the IDR bottleneck), so that a
 grounded, object-aware partition from SAM3 would improve depth?
 
-The answer is no: **depth accuracy is invariant to the partition's source.** Sourcing the
+The result is negative: **depth accuracy is invariant to the partition's source.** Sourcing the
 IDRs from SAM3 — queries via a linear projection or an attention adapter, or mask-pooled
 object centers — leaves accuracy unchanged, and the partition's object-grounding does not
 help. The partition is still *used* (ablating it multiplies error several-fold), but the head
@@ -73,6 +73,56 @@ Install the base requirements with `pip install -r requirements.txt` (or
 `requirements-lock.txt` for the exact pinned versions), build the deformable-attention op
 (`idisc/models/ops/make.sh`), and install SAM3 from source. See [docs/INSTALL.md](docs/INSTALL.md).
 
+## Checkpoints
+
+Checkpoints used in this work, with their sources:
+
+- **Trained in this work** — fine-tuned SAM3 heads (15k iterations), each a head module that
+  loads on top of the frozen SAM3 backbone (so SAM3, below, is required to run it). Each
+  download contains the checkpoint (`best_sam_finetuned.pt`) and its `resolved_config.yaml`:
+
+  | Model | AbsRel | Download |
+  |---|---|---|
+  | SAM3 linear (queries) | 0.0618 | [checkpoint + config](https://drive.google.com/file/d/1SgXYDuAEe7FS9DGBH9z-GqAD1T8Qsxw1/view?usp=sharing) |
+  | SAM3 adapter (attention) | 0.0607 | [checkpoint + config](https://drive.google.com/file/d/1TKY_RH_FC-MWB45cRT2QmK1PkPV9BjOS/view?usp=sharing) |
+  | SAM3 mask-linear (masks) | 0.0619 | [checkpoint + config](https://drive.google.com/file/d/1Gv2-80aG6HB3mij_5J8oSGWO8Paow3uy/view?usp=sharing) |
+- **iDisc baseline** (`kitti_resnet101.pt`, `nyu_resnet101.pt`) — from the
+  [iDisc model zoo](https://github.com/SysCV/idisc).
+- **SAM3 backbone** (`sam3.pt`, ~3.4 GB) **and** the `sam3` source — from
+  [Meta SAM3](https://github.com/facebookresearch/sam3) (see [INSTALL §4](docs/INSTALL.md)).
+
+### Running the checkpoints
+
+1. Set up the environment, build the deformable-attention op, and install SAM3 —
+   [INSTALL §1–4](docs/INSTALL.md).
+2. Download a checkpoint (the download includes its `resolved_config.yaml`) and the SAM3
+   backbone `sam3.pt` (Meta).
+3. Prepare KITTI Eigen — [DATA.md](docs/DATA.md).
+4. In that `resolved_config.yaml`, set `paths.sam_checkpoint` → your `sam3.pt` and
+   `paths.kitti_root` → your KITTI root.
+5. Evaluate:
+   ```bash
+   python scripts/experiments/eval_depth.py \
+     --config <resolved_config.yaml> \
+     --checkpoint <ours>.pt \
+     --output-dir output/runs/eval-demo
+   ```
+   AbsRel / δ1 / RMSE are printed and written to `output/runs/eval-demo/metrics.json`.
+
+**Single-image demo.**
+
+```bash
+python scripts/demo.py \
+  --config <resolved_config.yaml> \
+  --checkpoint <ours>.pt \
+  --image <rgb.png> --out depth.png
+```
+
+It writes a colormapped depth map for one RGB image.
+
+The config matching each checkpoint is listed in
+[docs/SAM2Depth/REPRODUCIBILITY.md](docs/SAM2Depth/REPRODUCIBILITY.md).
+
 ## Quickstart
 
 Everything runs on the cluster. `scripts/launch.sh` wraps
@@ -107,3 +157,7 @@ scripts/utils/            visualize_sequence.py, visualize_sam3.py, visualize_sa
 output/runs/, output/models/   per-run artifacts and checkpoints
 docs/SAM2Depth/           this documentation (legacy/ holds archived experiment notes)
 ```
+
+---
+
+*Parts of this code and documentation were developed with the assistance of Claude (Anthropic).*

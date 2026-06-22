@@ -14,9 +14,10 @@ the SAM3 experiments additionally need the SAM3 checkpoint (step 4).
 python -m venv .venv && source .venv/bin/activate
 # PyTorch + torchvision first, matching your CUDA (we used CUDA 12.8):
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-# SAM3 from source (requirements.txt lists `sam3`, which is not on PyPI):
-pip install -e /path/to/sam3
-pip install -r requirements-lock.txt
+
+git clone https://github.com/facebookresearch/sam3.git
+pip install -e ./sam3
+pip install -r requirements.txt
 export PYTHONPATH="$PWD:$PYTHONPATH"
 ```
 

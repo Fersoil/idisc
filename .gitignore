@@ -57,3 +57,5 @@ docs/diagrams/
 # I am not sure about this
 eval_results/
 *.log
+
+report/

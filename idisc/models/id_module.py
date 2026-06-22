@@ -3,14 +3,32 @@ Author: Luigi Piccinelli
 Licensed under the CC-BY NC 4.0 license (http://creativecommons.org/licenses/by-nc/4.0/)
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 
 from idisc.utils import (AttentionLayer, PositionEmbeddingSine,
                          _get_activation_cls, get_norm)
+
+
+def mask_pool_centers(masks, feature_map, eps=1e-6):
+    """Mask-weighted average pool of `feature_map` under each mask → (B, K, C).
+
+    Used to seed the mask_adapter tokens before the learnable masked
+    cross-attention refines them. `masks` are SAM3 mask logits (B, K, H, W).
+    """
+    m = torch.sigmoid(
+        F.interpolate(masks, size=feature_map.shape[-2:],
+                      mode="bilinear", align_corners=False)
+    )
+    if not masks.requires_grad:
+        m = m.detach()
+    mf = m.flatten(2)                              # (B, K, hw)
+    xf = feature_map.flatten(2).transpose(1, 2)    # (B, hw, C)
+    return (mf @ xf) / (mf.sum(-1, keepdim=True) + eps)
 
 
 class ISDHead(nn.Module):
@@ -55,6 +73,7 @@ class ISDHead(nn.Module):
                     nn.Linear(expansion * pixel_dim, pixel_dim),
                 ),
             )
+        self.value_proj = nn.Linear(query_dim, pixel_dim)
         setattr(
             self,
             "proj_output",
@@ -66,16 +85,21 @@ class ISDHead(nn.Module):
             ),
         )
 
-    def forward(self, feature_map: torch.Tensor, idrs: torch.Tensor):
+    def forward(self, feature_map, idrs=None, assign=None, centers=None):
         b, c, h, w = feature_map.shape
         feature_map = rearrange(
             feature_map + self.pixel_pe(feature_map), "b c h w -> b (h w) c"
         )
 
-        for i in range(self.depth):
-            update = getattr(self, f"cross_attn_{i+1}")(feature_map.clone(), idrs)
-            feature_map = feature_map + update
-            feature_map = feature_map + getattr(self, f"mlp_{i+1}")(feature_map.clone())
+        if assign is not None:
+            feature_map = feature_map + assign @ self.value_proj(centers)
+            for i in range(self.depth):
+                feature_map = feature_map + getattr(self, f"mlp_{i+1}")(feature_map.clone())
+        else:
+            for i in range(self.depth):
+                update = getattr(self, f"cross_attn_{i+1}")(feature_map.clone(), idrs)
+                feature_map = feature_map + update
+                feature_map = feature_map + getattr(self, f"mlp_{i+1}")(feature_map.clone())
         out = getattr(self, "proj_output")(feature_map)
         out = rearrange(out, "b (h w) c -> b c h w", h=h, w=w)
 
@@ -113,12 +137,23 @@ class ISD(nn.Module):
                 ),
             )
 
-    def forward(
-        self, xs: Tuple[torch.Tensor, ...], idrs: Tuple[torch.Tensor, ...]
-    ) -> Tuple[torch.Tensor, ...]:
-        outs, attns = [], []
+    def forward(self, xs, idrs=None, masks=None):
+        outs = []
         for i in range(self.num_resolutions):
-            out = getattr(self, f"head_{i+1}")(xs[i], idrs[i])
+            if masks is not None:
+                m = torch.sigmoid(
+                    F.interpolate(masks, size=xs[i].shape[-2:],
+                                  mode="bilinear", align_corners=False)
+                )
+                if not masks.requires_grad:
+                    m = m.detach()
+                mf = m.flatten(2)
+                xf = xs[i].flatten(2).transpose(1, 2)
+                centers = (mf @ xf) / (mf.sum(-1, keepdim=True) + 1e-6)
+                assign = (mf / (mf.sum(1, keepdim=True) + 1e-6)).transpose(1, 2)
+                out = getattr(self, f"head_{i+1}")(xs[i], assign=assign, centers=centers)
+            else:
+                out = getattr(self, f"head_{i+1}")(xs[i], idrs[i])
             outs.append(out)
         return tuple(outs)
 
@@ -159,7 +194,7 @@ class AFP(nn.Module):
         self.pixel_dim = pixel_dim
         self.eps = eps
 
-        bottlenck_dim = expansion * latent_dim
+        bottleneck_dim = expansion * latent_dim
         for i in range(self.num_resolutions):
             setattr(
                 self,
@@ -194,21 +229,25 @@ class AFP(nn.Module):
                     f"mlp_cross_{i+1}_d{1}",
                     nn.Sequential(
                         get_norm(norm, latent_dim),
-                        nn.Linear(latent_dim, bottlenck_dim),
+                        nn.Linear(latent_dim, bottleneck_dim),
                         _get_activation_cls(activation),
-                        nn.Linear(bottlenck_dim, latent_dim),
+                        nn.Linear(bottleneck_dim, latent_dim),
                     ),
                 )
 
     def forward(
-        self, feature_maps: Tuple[torch.Tensor, ...]
+        self,
+        feature_maps: Tuple[torch.Tensor, ...],
+        return_assign: bool = False,
     ) -> Tuple[torch.Tensor, ...]:
         b, *_ = feature_maps[0].shape
         idrs = []
         feature_maps_flat = []
+        sizes = []
         for i in range(self.num_resolutions):
             # feature maps embedding pre-process
             feature_map, (h, w) = feature_maps[i], feature_maps[i].shape[-2:]
+            sizes.append((h, w))
             feature_maps_flat.append(
                 rearrange(
                     feature_map + getattr(self, f"pixel_pe_{i+1}")(feature_map),
@@ -219,16 +258,25 @@ class AFP(nn.Module):
             idrs.append(getattr(self, f"mu_{i+1}").expand(b, -1, -1))
 
         # layers
+        assigns = [None] * self.num_resolutions
         for i in range(self.num_resolutions):
-            for _ in range(self.iters):
-                # Cross attention ops
-                idrs[i] = idrs[i] + getattr(self, f"cross_attn_{i+1}_d{1}")(
-                    idrs[i].clone(), feature_maps_flat[i]
-                )
+            for t in range(self.iters):
+                if return_assign and t == self.iters - 1:
+                    update, assign = getattr(self, f"cross_attn_{i+1}_d{1}")(
+                        idrs[i].clone(), feature_maps_flat[i], return_assign=True
+                    )
+                    assigns[i] = assign.reshape(b, self.num_slots, *sizes[i])
+                else:
+                    update = getattr(self, f"cross_attn_{i+1}_d{1}")(
+                        idrs[i].clone(), feature_maps_flat[i]
+                    )
+                idrs[i] = idrs[i] + update
                 idrs[i] = idrs[i] + getattr(self, f"mlp_cross_{i+1}_d{1}")(
                     idrs[i].clone()
                 )
 
+        if return_assign:
+            return tuple(idrs), assigns
         return tuple(idrs)
 
     @classmethod
@@ -250,96 +298,138 @@ class AFP(nn.Module):
         return obj
 
 
-class Sam3QueryToIDR(nn.Module):
-    """Translate SAM3 instance queries (B, K_in, query_in_dim) into iDisc
-    IDRs (B, num_latents, latent_dim) via cross-attention from learnable
-    seeds. Mirrors AFP's algorithm but operates on segmentation queries
-    instead of FPN features (no positional encoding — the input has no
-    spatial structure)."""
+class ContextAdapter(nn.Module):
+    """
+        IDR source for sam_mode="adapter". For each ISD resolution, for `depth` iterations,
+        SAM3 tokens self-attend, cross-attend over that level's feature map, then run an MLP. 
+        Output is `(B, K, dim)` per resolution.
+    """
 
     def __init__(
         self,
         num_resolutions: int,
         depth: int = 2,
-        query_in_dim: int = 256,
-        latent_dim: int = 128,
-        num_latents: int = 32,
+        dim: int = 256,
+        pixel_dim: int = 256,
         num_heads: int = 4,
         activation: str = "silu",
         norm: str = "torchLN",
         expansion: int = 2,
+        mask_attend: bool = True,
     ):
         super().__init__()
         self.num_resolutions = num_resolutions
         self.iters = depth
-        self.num_slots = num_latents
-        self.latent_dim = latent_dim
-        self.query_in_dim = query_in_dim
-
-        bottleneck_dim = expansion * latent_dim
+        self.dim = dim
+        # When fed a per-token support mask, restrict each token's cross-attention
+        # to its own object's pixels (learnable masked pooling). Off => the tokens
+        # cross-attend over the whole feature map (unmasked control).
+        self.mask_attend = mask_attend
+        bottleneck_dim = expansion * dim
         for i in range(num_resolutions):
             setattr(
                 self,
-                f"kv_proj_{i+1}",
-                nn.Linear(query_in_dim, latent_dim),
+                f"pixel_pe_{i+1}",
+                PositionEmbeddingSine(pixel_dim // 2, normalize=True),
             )
-            setattr(
-                self,
-                f"mu_{i+1}",
-                nn.Parameter(torch.randn(1, num_latents, latent_dim)),
-            )
-            setattr(
-                self,
-                f"cross_attn_{i+1}_d{1}",
-                AttentionLayer(
-                    sink_dim=latent_dim,
-                    hidden_dim=latent_dim,
-                    source_dim=latent_dim,
-                    output_dim=latent_dim,
-                    num_heads=num_heads,
-                    dropout=0.0,
-                    pre_norm=True,
-                    sink_competition=True,
-                ),
-            )
-            setattr(
-                self,
-                f"mlp_cross_{i+1}_d{1}",
-                nn.Sequential(
-                    get_norm(norm, latent_dim),
-                    nn.Linear(latent_dim, bottleneck_dim),
-                    _get_activation_cls(activation),
-                    nn.Linear(bottleneck_dim, latent_dim),
-                ),
-            )
+            for j in range(depth):
+                setattr(
+                    self,
+                    f"self_attn_{i+1}_{j+1}",
+                    AttentionLayer(
+                        sink_dim=dim, hidden_dim=dim, source_dim=None,
+                        output_dim=dim, num_heads=num_heads, dropout=0.0,
+                        pre_norm=True, sink_competition=False,
+                    ),
+                )
+                setattr(
+                    self,
+                    f"cross_attn_{i+1}_{j+1}",
+                    AttentionLayer(
+                        sink_dim=dim, hidden_dim=dim, source_dim=pixel_dim,
+                        output_dim=dim, num_heads=num_heads, dropout=0.0,
+                        pre_norm=True, sink_competition=False,
+                    ),
+                )
+                setattr(
+                    self,
+                    f"mlp_{i+1}_{j+1}",
+                    nn.Sequential(
+                        get_norm(norm, dim),
+                        nn.Linear(dim, bottleneck_dim),
+                        _get_activation_cls(activation),
+                        nn.Linear(bottleneck_dim, dim),
+                    ),
+                )
 
-    def forward(self, queries: torch.Tensor) -> Tuple[torch.Tensor, ...]:
-        # queries: (B, K_in, query_in_dim)
-        b = queries.shape[0]
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        feature_maps: Tuple[torch.Tensor, ...],
+        masks: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, ...]:
+        if self.mask_attend and masks is not None:
+            raise NotImplementedError(
+                "mask-restricted adapter attention (mask_attend) needs an "
+                "AttentionLayer that accepts attn_bias; upstream iDisc's "
+                "AttentionLayer does not, so the mask_adapter path is unsupported"
+            )
         idrs = []
         for i in range(self.num_resolutions):
-            kv = getattr(self, f"kv_proj_{i+1}")(queries)  # (B, K_in, latent_dim)
-            mu = getattr(self, f"mu_{i+1}").expand(b, -1, -1)  # (B, num_latents, latent_dim)
-            x = mu
-            for _ in range(self.iters):
-                x = x + getattr(self, f"cross_attn_{i+1}_d{1}")(x.clone(), kv)
-                x = x + getattr(self, f"mlp_cross_{i+1}_d{1}")(x.clone())
+            fmap = feature_maps[i]
+            ctx = rearrange(
+                fmap + getattr(self, f"pixel_pe_{i+1}")(fmap), "b d h w -> b (h w) d"
+            )
+            x = tokens
+            for j in range(self.iters):
+                x = x + getattr(self, f"self_attn_{i+1}_{j+1}")(x.clone())
+                x = x + getattr(self, f"cross_attn_{i+1}_{j+1}")(x.clone(), ctx)
+                x = x + getattr(self, f"mlp_{i+1}_{j+1}")(x.clone())
             idrs.append(x)
         return tuple(idrs)
 
     @classmethod
     def build(cls, config):
-        # Match ISD's num_resolutions, not AFP's (which skips low-res levels).
-        # ISD expects one IDR set per resolution it has heads for.
-        translate_cfg = config["model"].get("sam3_translate", {})
-        obj = cls(
+        adapter_cfg = config["model"].get("context_adapter", {}) or {}
+        return cls(
             num_resolutions=config["model"]["isd"]["num_resolutions"],
-            depth=translate_cfg.get("depths", config["model"]["afp"]["depths"]),
-            query_in_dim=translate_cfg.get("query_in_dim", 256),
-            num_latents=config["model"]["afp"]["num_latents"],
-            latent_dim=config["model"]["afp"]["latent_dim"],
+            depth=adapter_cfg.get("depth", 2),
+            dim=config["model"]["afp"]["latent_dim"],
+            pixel_dim=config["model"]["pixel_decoder"]["hidden_dim"],
             num_heads=config["model"]["num_heads"],
             expansion=config["model"]["expansion"],
             activation=config["model"]["activation"],
+            mask_attend=adapter_cfg.get("mask_attend", True),
         )
-        return obj
+
+
+class MemoryFPN(nn.Module):
+    """
+        Learned SimpleFPN turning SAM3's single fusion `memory` level into an 
+        n-level pyramid with ConvTranspose (up) / conv (same) / strided conv (down).
+        Level `i` has scale `top_scale / 2**i`: 72x72 input, top_scale=2 -> [144^2,72^2,36^2];
+        top_scale=4 -> [288^2,144^2,72^2] (matches backbone_fpn resolution).
+    """
+
+    def __init__(self, dim: int = 256, n_levels: int = 3, num_groups: int = 8,
+                 top_scale: int = 2):
+        super().__init__()
+        self.blocks = nn.ModuleList()
+        for i in range(n_levels):
+            scale = top_scale / (2.0 ** i)
+            layers = []
+            if scale > 1.0:
+                f = int(scale)
+                layers += [nn.ConvTranspose2d(dim, dim, kernel_size=f, stride=f), nn.GELU()]
+            elif scale < 1.0:
+                f = int(round(1.0 / scale))
+                layers += [nn.Conv2d(dim, dim, kernel_size=f, stride=f), nn.GELU()]
+            layers += [
+                nn.Conv2d(dim, dim, kernel_size=3, padding=1),
+                nn.GroupNorm(num_groups, dim),
+                nn.GELU(),
+            ]
+            self.blocks.append(nn.Sequential(*layers))
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        return tuple(blk(x) for blk in self.blocks)

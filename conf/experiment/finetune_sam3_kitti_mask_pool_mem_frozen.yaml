@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_sam3_image
+  - override /finetune: image
+
+run:
+  exp_id: finetune-sam3-kitti-mask-pool-mem-frozen
+  task: train
+  dataset_mode: image
+
+method:
+  idr_source: sam3
+  sam_mode: mask_pool
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+
+model:
+  pixel_encoder:
+    pixel_source: sam3_memory
+    sam3_trainable: []
+
+finetune:
+  n_iters: 15000
+
+tags: [finetune, sam3, kitti, image]

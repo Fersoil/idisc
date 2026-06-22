@@ -68,11 +68,6 @@ class KITTISequenceDataset(Dataset):
         super().__init__()
         self.base_path = base_path
         self.clip_length = clip_length
-        # `stride` controls how far the sliding window advances between
-        # successive clips. stride=1 (legacy) makes consecutive clips share
-        # clip_length-1 frames; stride=clip_length makes clips disjoint.
-        # Disjoint clips reduce duplicate frame reads ~clip_length× and
-        # give cleaner per-epoch coverage.
         self.stride = int(stride) if stride is not None else clip_length
         self.test_mode = test_mode
         self.depth_scale = depth_scale
@@ -120,7 +115,6 @@ class KITTISequenceDataset(Dataset):
         return valid_mask
 
     def _sample_train_aug(self):
-        """Sample all random decisions once; caller applies them identically to every frame."""
         do_flip = np.random.random() < 0.5
         phot_ops = []
         if np.random.random() < 0.8:
@@ -143,9 +137,6 @@ class KITTISequenceDataset(Dataset):
     def __getitem__(self, idx):
         clip = self.clips[idx]
         frame_indices = clip["frame_indices"]
-        # KITTI image_dir is "<date>/<drive>/image_02/data"; the annotated
-        # depth lives at "<base>/<drive>/proj_depth/groundtruth/image_02/"
-        # — drive name only, no date prefix.
         drive_name = clip["image_dir"].split("/")[1]
         depth_dir = os.path.join(drive_name, "proj_depth", "groundtruth", "image_02")
 

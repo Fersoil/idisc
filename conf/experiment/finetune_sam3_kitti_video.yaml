@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_sam3_video
+  - override /finetune: video
+
+run:
+  exp_id: finetune-sam3-kitti-video
+  task: train
+  dataset_mode: video
+
+method:
+  idr_source: sam3
+  sam_mode: linear_proj
+  prompt:
+    mode: multiclass
+    classes: [vehicle, tree, road, building]
+
+tags: [finetune, sam3, kitti, video]

@@ -1,19 +1,5 @@
-"""Validate and resolve the Hydra-composed config into a plain dict.
 
-Schema (enforced here):
-  run.task          in {"train", "eval"}
-  run.dataset_mode  in {"image", "video"}
-  method.idr_source in {"afp", "sam3"}
-  method.sam_mode   in {None, "replace", "translate"}; must be None iff idr_source == "afp"
-  method.prompt.mode in {None, "multiclass", "singleclass"};
-                      must be non-None iff a SAM3 pixel_encoder is configured;
-                      when non-None, method.prompt.classes must be non-empty.
-
-The single source of truth for prompt_mode / prompt_classes is method.prompt;
-those values are mirrored into model.pixel_encoder so the encoder factory
-keeps reading from its own config block.
-"""
-
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +9,10 @@ from omegaconf import DictConfig, OmegaConf
 _VALID_TASKS = {"train", "eval"}
 _VALID_DATASET_MODES = {"image", "video"}
 _VALID_IDR_SOURCES = {"afp", "sam3"}
-_VALID_SAM_MODES = {None, "replace", "translate"}
+_VALID_SAM_MODES = {None, "linear_proj", "adapter", "mask_pool", "mask_adapter", "mask_linear"}
 _VALID_PROMPT_MODES = {None, "multiclass", "singleclass"}
+_VALID_PIXEL_SOURCES = {"msda", "sam3_memory", "backbone_fpn"}
+_VALID_LORA_TARGETS = {"qkv", "proj", "fc1", "fc2"}
 
 
 def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +39,12 @@ def _validate(runtime: dict[str, Any]) -> None:
 
     method = runtime.get("method", {})
     idr_source = method.get("idr_source")
+    if method.get("sam_mode") == "replace":
+        warnings.warn(
+            "method.sam_mode='replace' is deprecated; use 'linear_proj'.",
+            stacklevel=2,
+        )
+        method["sam_mode"] = "linear_proj"
     sam_mode = method.get("sam_mode")
     if idr_source not in _VALID_IDR_SOURCES:
         raise ValueError(
@@ -64,7 +58,8 @@ def _validate(runtime: dict[str, Any]) -> None:
         raise ValueError("method.sam_mode must be null when idr_source='afp'")
     if idr_source == "sam3" and sam_mode is None:
         raise ValueError(
-            "method.sam_mode must be 'replace' or 'translate' when idr_source='sam3'"
+            "method.sam_mode must be 'linear_proj' or 'adapter' "
+            "when idr_source='sam3'"
         )
 
     encoder_name = (
@@ -80,6 +75,26 @@ def _validate(runtime: dict[str, Any]) -> None:
             "pixel_encoder.name='sam3_video' requires run.dataset_mode='video'"
         )
 
+    pixel_source = (
+        runtime.get("model", {}).get("pixel_encoder", {}).get("pixel_source", "msda")
+    )
+    if pixel_source not in _VALID_PIXEL_SOURCES:
+        raise ValueError(
+            f"pixel_encoder.pixel_source must be one of {_VALID_PIXEL_SOURCES}, "
+            f"got {pixel_source!r}"
+        )
+
+    lora = runtime.get("model", {}).get("pixel_encoder", {}).get("lora", {}) or {}
+    if lora.get("enabled"):
+        if not is_sam3_encoder:
+            raise ValueError("pixel_encoder.lora.enabled requires a SAM3 pixel_encoder")
+        bad = set(lora.get("targets", [])) - _VALID_LORA_TARGETS
+        if bad:
+            raise ValueError(
+                f"pixel_encoder.lora.targets must be a subset of "
+                f"{_VALID_LORA_TARGETS}, got unexpected {bad}"
+            )
+
     prompt = method.get("prompt", {}) or {}
     prompt_mode = prompt.get("mode")
     if prompt_mode not in _VALID_PROMPT_MODES:
@@ -88,10 +103,36 @@ def _validate(runtime: dict[str, Any]) -> None:
         )
     if is_sam3_encoder and prompt_mode is None:
         raise ValueError("SAM3 encoders require method.prompt.mode to be set")
-    if prompt_mode is not None and not prompt.get("classes"):
+    if (prompt_mode is not None and not prompt.get("classes")
+            and sam_mode not in ("mask_pool", "mask_adapter", "mask_linear")):
         raise ValueError(
             f"method.prompt.mode={prompt_mode!r} requires non-empty method.prompt.classes"
         )
+
+    if sam_mode in ("mask_pool", "mask_adapter", "mask_linear"):
+        if idr_source != "sam3":
+            raise ValueError(f"method.sam_mode={sam_mode!r} requires method.idr_source='sam3'")
+        if encoder_name != "sam3_image":
+            raise ValueError(
+                f"method.sam_mode={sam_mode!r} requires pixel_encoder.name='sam3_image', "
+                f"got {encoder_name!r}"
+            )
+        if pixel_source not in ("sam3_memory", "backbone_fpn"):
+            raise ValueError(
+                f"method.sam_mode={sam_mode!r} requires pixel_encoder.pixel_source in "
+                f"{{sam3_memory, backbone_fpn}}, got {pixel_source!r}"
+            )
+        if prompt_mode != "multiclass":
+            raise ValueError(
+                f"method.sam_mode={sam_mode!r} requires method.prompt.mode='multiclass', "
+                f"got {prompt_mode!r}"
+            )
+        trainable = runtime.get("model", {}).get("pixel_encoder", {}).get("sam3_trainable", [])
+        if "head" in trainable and "decoder" not in trainable:
+            raise ValueError(
+                "sam3_trainable='head' requires 'decoder' to also be in sam3_trainable "
+                "(head is downstream of the decoder)"
+            )
 
 
 def build_runtime_config(
@@ -105,13 +146,11 @@ def build_runtime_config(
     prompt_mode = prompt.get("mode")
     prompt_classes = list(prompt.get("classes") or [])
 
-    # Mirror prompt config into pixel_encoder so the encoder factory finds it.
     encoder_cfg = runtime.setdefault("model", {}).setdefault("pixel_encoder", {})
     if encoder_cfg.get("name", "").startswith("sam3"):
         encoder_cfg["prompt_mode"] = prompt_mode
         encoder_cfg["prompt_classes"] = prompt_classes
 
-    # Convenience top-level pointer used by callers that don't want to dig.
     runtime["prompt_mode"] = prompt_mode
 
     return runtime

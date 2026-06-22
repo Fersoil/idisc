@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_r101
+  - override /finetune: video
+
+run:
+  exp_id: finetune-idisc-kitti-video
+  task: train
+  dataset_mode: video
+
+method:
+  idr_source: afp
+  sam_mode: null
+  prompt:
+    mode: null
+    classes: []
+
+tags: [finetune, idisc, kitti, video]

@@ -54,13 +54,17 @@ class AttentionLayer(nn.Module):
         self.sink_competition = sink_competition
 
     def forward(
-        self, sink: torch.Tensor, source: Optional[torch.Tensor] = None
+        self,
+        sink: torch.Tensor,
+        source: Optional[torch.Tensor] = None,
+        return_assign: bool = False,
     ) -> torch.Tensor:
         if self.pre_norm:
             sink = self.norm(sink)
             if source is not None:
                 source = self.norm_context(source)
 
+        bsz = sink.shape[0]
         q = self.to_q(sink)
         source = source if source is not None else sink
         k, v = self.to_kv(source).chunk(2, dim=-1)
@@ -84,5 +88,10 @@ class AttentionLayer(nn.Module):
         out = self.to_out(out)
         if not self.pre_norm:
             out = self.norm(out)
+
+        if return_assign:
+            assign = F.softmax(similarity_matrix, dim=-2)
+            assign = assign.reshape(bsz, self.num_heads, *assign.shape[1:]).mean(1)
+            return out, assign
 
         return out

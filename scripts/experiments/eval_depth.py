@@ -1,12 +1,4 @@
 #!/usr/bin/env python
-"""Standalone depth evaluation.
-
-Loads a resolved Hydra config (the one saved as `resolved_config.yaml` inside
-a run directory) and a checkpoint, then runs validation on the configured
-val dataset. Used when you want metrics on a saved checkpoint outside of
-the training loop.
-"""
-
 import argparse
 import json
 import os
@@ -16,18 +8,25 @@ from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, SequentialSampler
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-import idisc.dataloders as custom_dataset
-from idisc.models.idisc import IDisc
+from scripts.experiments._eval_common import build_eval_model, build_val_loader
 from idisc.utils import DICT_METRICS_DEPTH, RunningMetric
 
 
 def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
+    """
+        The evaluation function.
+
+        Args:
+            cfg: A resolved runtime config
+
+        Returns:
+            metrics: a dictionary of all relevant metric values
+    """
     sam_mode = cfg["method"]["sam_mode"]
     dataset_mode = cfg["run"]["dataset_mode"]
     encoder_name = cfg["model"]["pixel_encoder"]["name"]
@@ -37,31 +36,16 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
     os.makedirs(output_dir, exist_ok=True)
     print(f"Device: {device} | encoder={encoder_name} | sam_mode={sam_mode}", flush=True)
 
-    model = IDisc.build(cfg).to(device)
-    model.load_pretrained(checkpoint_path)
+    model = build_eval_model(cfg, checkpoint_path, device)
     print(f"Loaded checkpoint: {checkpoint_path}", flush=True)
-    model.eval()
-
-    dataset_cls = "KITTISequenceDataset" if dataset_mode == "video" else "KITTIDataset"
-    data_path = os.path.join(cfg["paths"]["base_path"], cfg["data"]["data_root"])
-    valid_dataset = getattr(custom_dataset, dataset_cls)(
-        test_mode=True,
-        base_path=data_path,
-        crop=cfg["data"].get("crop"),
-        manifest_path=cfg["data"].get("manifest_path"),
-        clip_length=cfg["data"].get("clip_length", 4),
-        stride=cfg["data"].get("stride"),
-    )
-    valid_loader = DataLoader(
-        valid_dataset, batch_size=1, num_workers=2,
-        sampler=SequentialSampler(valid_dataset), pin_memory=True,
-    )
-    print(f"{len(valid_dataset)} samples.", flush=True)
+    valid_loader = build_val_loader(cfg)
+    print(f"{len(valid_loader)} samples.", flush=True)
 
     tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
     t0 = time.time()
     with torch.no_grad():
         for i, batch in enumerate(valid_loader):
+            # in case of sequential data
             if encoder_is_video and "images" in batch:
                 images = batch["images"].to(device)
                 depths = batch["depths"].to(device)
@@ -69,12 +53,14 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
                 B, T = images.shape[:2]
                 preds, vm, vd = [], [], []
                 for b in range(B):
+                    # extract features and queries for each clip
                     enc_out = model.pixel_encoder(images[b])
                     fpn_levels, queries_T = enc_out[:-1], enc_out[-1]
                     for t in range(T):
                         if masks[b, t].bool().sum() == 0:
                             continue
                         frame_fpn = tuple(lvl[t:t + 1] for lvl in fpn_levels)
+                        # get depth prediction for each frame
                         pred, _, _ = model(
                             images[b, t:t + 1],
                             instance_queries=queries_T[t],
@@ -93,6 +79,7 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
                         torch.cat(vm, dim=0).permute(0, 2, 3, 1),
                     )
             else:
+                # non-sequential data
                 data = batch["image"].to(device) if "image" in batch \
                     else batch["images"].to(device).view(-1, *batch["images"].shape[2:])
                 gt = batch["gt"].to(device) if "gt" in batch \

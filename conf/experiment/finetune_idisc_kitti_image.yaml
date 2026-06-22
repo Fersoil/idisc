@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_r101
+  - override /finetune: image
+
+run:
+  exp_id: finetune-idisc-kitti-image
+  task: train
+  dataset_mode: image
+
+method:
+  idr_source: afp
+  sam_mode: null
+  prompt:
+    mode: null
+    classes: []
+
+tags: [finetune, idisc, kitti, image]

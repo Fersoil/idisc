@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - override /dataset: kitti
+  - override /model: idisc_r101
+
+run:
+  exp_id: eval-idisc-kitti-image
+  task: eval
+  dataset_mode: image
+
+method:
+  idr_source: afp
+  sam_mode: null
+  prompt:
+    mode: null
+    classes: []
+
+tags: [eval, idisc, kitti, image]

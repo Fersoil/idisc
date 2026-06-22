@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Callable, List, Union
 
 import torch
+import torch.utils.checkpoint
 from torch import nn
 from torch.cuda.amp import autocast
 from torch.nn import functional as F
@@ -22,6 +23,7 @@ class MSDeformAttnTransformerEncoderOnly(nn.Module):
         activation="gelu",
         num_resolutions=4,
         enc_n_points=8,
+        grad_checkpoint=False,
     ):
         super().__init__()
 
@@ -37,7 +39,9 @@ class MSDeformAttnTransformerEncoderOnly(nn.Module):
             num_heads,
             enc_n_points,
         )
-        self.encoder = MSDeformAttnTransformerEncoder(encoder_layer, depth)
+        self.encoder = MSDeformAttnTransformerEncoder(
+            encoder_layer, depth, grad_checkpoint=grad_checkpoint
+        )
         self.level_embed = nn.Parameter(torch.Tensor(num_resolutions, input_dim))
 
         self._reset_parameters()
@@ -180,11 +184,13 @@ class MSDeformAttnTransformerEncoderLayer(nn.Module):
 
 
 class MSDeformAttnTransformerEncoder(nn.Module):
-    def __init__(self, encoder_layer, num_layers):
+    def __init__(self, encoder_layer, num_layers, grad_checkpoint=False):
         super().__init__()
         for i in range(num_layers):
             setattr(self, f"layer_{i+1}", deepcopy(encoder_layer))
         self.num_layers = num_layers
+        # Recompute layer activations in backward (training only) to save memory.
+        self.grad_checkpoint = grad_checkpoint
 
     @staticmethod
     def get_reference_points(spatial_shapes, valid_ratios, device):
@@ -216,14 +222,17 @@ class MSDeformAttnTransformerEncoder(nn.Module):
             spatial_shapes, valid_ratios, device=src.device
         )
         for i in range(self.num_layers):
-            output = getattr(self, f"layer_{i+1}")(
-                output,
-                pos,
-                reference_points,
-                spatial_shapes,
-                level_start_index,
-                padding_mask,
-            )
+            layer = getattr(self, f"layer_{i+1}")
+            if self.grad_checkpoint and self.training:
+                output = torch.utils.checkpoint.checkpoint(
+                    layer, output, pos, reference_points, spatial_shapes,
+                    level_start_index, padding_mask, use_reentrant=False,
+                )
+            else:
+                output = layer(
+                    output, pos, reference_points, spatial_shapes,
+                    level_start_index, padding_mask,
+                )
 
         return output
 
@@ -242,6 +251,7 @@ class MSDeformAttnPixelDecoder(nn.Module):
         activation: str = "silu",
         ffn_dim: int = 1024,
         use_fpn: bool = True,
+        grad_checkpoint: bool = False,
     ):
         super().__init__()
         self.output_dim = output_dim
@@ -276,6 +286,7 @@ class MSDeformAttnPixelDecoder(nn.Module):
             num_resolutions=self.num_resolutions,
             enc_n_points=enc_n_points,
             activation=activation,
+            grad_checkpoint=grad_checkpoint,
         )
 
         # extra fpn levels
@@ -387,5 +398,6 @@ class MSDeformAttnPixelDecoder(nn.Module):
             ffn_dim=config["model"]["pixel_decoder"]["hidden_dim"]
             * config["model"]["expansion"],
             activation=config["model"]["activation"],
+            grad_checkpoint=config["model"]["pixel_decoder"].get("grad_checkpoint", False),
         )
         return obj

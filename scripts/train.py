@@ -59,12 +59,13 @@ def _to_clip(batch, device):
 def _valid_frames(masks):
     return int(masks.bool().any(dim=(2, 3, 4)).sum().item())
 
-
+# Validation loop for non-sequential data
 def _validate_image(model, valid_loader, context, device, sam_mode):
     tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
     for i, batch in enumerate(valid_loader):
         data, gt, mask, _ = _unpack_batch(batch, device)
         preds = []
+        # extract depth for each image in batch
         for idx in range(data.shape[0]):
             with context:
                 pred, _, _ = model(
@@ -86,7 +87,7 @@ def _validate_image(model, valid_loader, context, device, sam_mode):
     tracker.reset_metrics()
     return metrics
 
-
+# Validation loop for sequential data
 def _validate_video(model, valid_loader, context, device, sam_mode):
     tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
     for i, batch in enumerate(valid_loader):
@@ -94,8 +95,11 @@ def _validate_video(model, valid_loader, context, device, sam_mode):
         B, T = images.shape[:2]
         preds, valid_masks, valid_depths = [], [], []
         for b in range(B):
+            # extract FPN features and queries from a clip
             enc_out = model.pixel_encoder(images[b])
             fpn_levels, queries_T = enc_out[:-1], enc_out[-1]
+
+            # get depth prediction for each frame
             for t in range(T):
                 if masks[b, t].bool().sum() == 0:
                     continue
@@ -125,7 +129,7 @@ def _validate_video(model, valid_loader, context, device, sam_mode):
     tracker.reset_metrics()
     return metrics
 
-
+# Validation loop when taking temporal metrics into account
 def _validate_temporal(model, valid_loader, context, device):
     tracker = RunningMetric(list(DICT_METRICS_DEPTH.keys()))
     flick = []
@@ -139,6 +143,7 @@ def _validate_temporal(model, valid_loader, context, device):
             labels = model.track_module(clip)
             preds = []
             for t in range(T):
+                # get depth predictions for each frame
                 with context:
                     pred, _, _ = model(clip[t:t + 1], sam_mode=None)
                 preds.append(pred)
@@ -148,6 +153,7 @@ def _validate_temporal(model, valid_loader, context, device):
                         pred.permute(0, 2, 3, 1),
                         masks[b, t:t + 1].permute(0, 2, 3, 1),
                     )
+            # add temporal loss metrics for the metric tracker
             flick.append(temporal_smoothness_loss(torch.cat(preds, dim=0), labels).item())
     metrics = tracker.get_metrics()
     tracker.reset_metrics()
@@ -165,6 +171,7 @@ def _run_validation(model, valid_loader, context, device, sam_mode,
 
 
 def _set_trainable(model, encoder_name):
+    # unfreeze iDisc
     for p in model.parameters():
         p.requires_grad = True
     if encoder_name.startswith("sam3"):
@@ -174,10 +181,13 @@ def _set_trainable(model, encoder_name):
             for p in sam_module.parameters():
                 p.requires_grad = False
         enc = model.pixel_encoder
+
+        # partially unfreeze SAM3 if used
         for part in getattr(enc, "sam3_trainable", []):
             enc._sam3_submodule(part).requires_grad_(True)
             print(f"  SAM3 unfrozen: {part}", flush=True)
 
+        # unfreeze LoRA
         n_lora = 0
         for m in enc.modules():
             if isinstance(m, LoRALinear):
@@ -217,6 +227,7 @@ def _build_optimizer(model, finetune_cfg, n_iters):
     head_params = [p for n, p in model.named_parameters()
                    if p.requires_grad and ".sam_model." not in n]
     if sam3_params:
+        # use different learning rates for iDisc and SAM3 finetuning
         sam3_lr = float(finetune_cfg["sam3_lr"])
         optimizer = optim.AdamW(
             [{"params": head_params, "lr": lr, "weight_decay": 0.01},
@@ -234,9 +245,10 @@ def _build_optimizer(model, finetune_cfg, n_iters):
     )
     return optimizer, scheduler, head_params + sam3_params
 
-
+# Batch training loop for either non-sequential and sequential data (with optional temporal loss)
 def _train_batch(model, batch, device, context, sam_mode,
                  encoder_is_video, temporal_enabled, temporal_weight):
+    # sequential data with temporal loss
     if temporal_enabled and "images" in batch:
         images, depths, masks = _to_clip(batch, device)
         vf = _valid_frames(masks)
@@ -252,19 +264,24 @@ def _train_batch(model, batch, device, context, sam_mode,
                 preds, silog = [], 0.0
                 for t in range(T):
                     valid = masks[b, t].bool().sum() > 0
+                    # get depth predictions for each frame
                     with context:
                         pred = checkpoint(lambda f: model(f, sam_mode=None)[0],
                                           clip[t:t + 1], use_reentrant=False)
                         if valid:
+                            # calculate SIlog as depth loss
                             silog = silog + model.loss.weight * model.loss(
                                 pred, target=depths[b, t:t + 1],
                                 mask=masks[b, t:t + 1].bool(), interpolate=True)
                     preds.append(pred)
+                # get temporal loss for the clip
                 l_temp = temporal_smoothness_loss(torch.cat(preds, dim=0), labels)
+                # total loss
                 loss = silog / vf + temporal_weight * l_temp
                 loss.backward()
                 total += loss.item()
             else:
+                # fallback if lambda=0
                 for t in range(T):
                     if masks[b, t].bool().sum() == 0:
                         continue
@@ -276,6 +293,7 @@ def _train_batch(model, batch, device, context, sam_mode,
                     total += loss.item()
         return total / vf
 
+    # sequential data without temporal loss
     if encoder_is_video and "images" in batch:
         images, depths, masks = _to_clip(batch, device)
         vf = _valid_frames(masks)
@@ -284,6 +302,7 @@ def _train_batch(model, batch, device, context, sam_mode,
         B, T = images.shape[:2]
         total = 0.0
         for b in range(B):
+            # extract FPN features and detector queries from a clip
             enc_out = model.pixel_encoder(images[b])
             fpn_levels = enc_out[:-1]
             queries_T = enc_out[-1]
@@ -300,6 +319,7 @@ def _train_batch(model, batch, device, context, sam_mode,
                 frame_fpn, iq = per_frame[t]
                 per_frame[t] = None
                 inv_frame_fpn = tuple(reversed(frame_fpn))
+                # get depth predictions for each frame
                 with context:
                     _, losses, _ = model(
                         images[b, t:t + 1],
@@ -316,6 +336,7 @@ def _train_batch(model, batch, device, context, sam_mode,
                 total += loss.item()
         return total / vf
 
+    # non-sequential data
     data, gt, mask, n_samples = _unpack_batch(batch, device)
     vf = int(mask.reshape(n_samples, -1).bool().any(dim=1).sum().item())
     if vf == 0:
@@ -338,10 +359,20 @@ def _train_batch(model, batch, device, context, sam_mode,
 
 
 def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
-    sam_mode = cfg["method"]["sam_mode"]
-    idr_source = cfg["method"]["idr_source"]
-    dataset_mode = cfg["run"]["dataset_mode"]
-    encoder_name = cfg["model"]["pixel_encoder"]["name"]
+    """
+        The training function.
+
+        Args:
+            cfg: A resolved runtime config
+
+        Returns:
+            best_abs_rel: absolute relative error of the best checkpoint,
+            last_checkpoint: path of the final checkpoint
+    """
+    sam_mode = cfg["method"]["sam_mode"]                        # afp / sam3
+    idr_source = cfg["method"]["idr_source"]                    # linear_proj / adapter / mask_linear
+    dataset_mode = cfg["run"]["dataset_mode"]                   # image / video
+    encoder_name = cfg["model"]["pixel_encoder"]["name"]        # resnet101 / sam3_image / sam3_video
     encoder_is_video = encoder_name == "sam3_video"
 
     finetune_cfg = cfg["finetune"]
@@ -404,6 +435,8 @@ def run_train(cfg: dict[str, Any]) -> dict[str, Any]:
     start = time()
     step = 0
     model.train()
+
+    # Training loop
     while step < n_iters:
         for batch in train_loader:
             if step >= n_iters:

@@ -26,10 +26,14 @@ def region_r2(mask_logits, gt, valid, tau):
         return None, 0
     d = gt[sel]
     a = assign[sel]
+    # SST from ground truth mean depths 
     ss_tot = ((d - d.mean()) ** 2).sum()
     if ss_tot <= 0:
         return None, 0
+
+    # uniq = number of active masks
     uniq, inv = torch.unique(a, return_inverse=True)
+    # for each active mask, get its region mean-depth 
     sums = torch.zeros(uniq.numel(), device=d.device).scatter_add(0, inv, d)
     cnts = torch.zeros(uniq.numel(), device=d.device).scatter_add(0, inv, torch.ones_like(d))
     region_mean = (sums / cnts)[inv]

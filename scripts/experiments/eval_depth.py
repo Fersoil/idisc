@@ -18,6 +18,15 @@ from idisc.utils import DICT_METRICS_DEPTH, RunningMetric
 
 
 def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
+    """
+        The evaluation function.
+
+        Args:
+            cfg: A resolved runtime config
+
+        Returns:
+            metrics: a dictionary of all relevant metric values
+    """
     sam_mode = cfg["method"]["sam_mode"]
     dataset_mode = cfg["run"]["dataset_mode"]
     encoder_name = cfg["model"]["pixel_encoder"]["name"]
@@ -36,6 +45,7 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
     t0 = time.time()
     with torch.no_grad():
         for i, batch in enumerate(valid_loader):
+            # in case of sequential data
             if encoder_is_video and "images" in batch:
                 images = batch["images"].to(device)
                 depths = batch["depths"].to(device)
@@ -43,12 +53,14 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
                 B, T = images.shape[:2]
                 preds, vm, vd = [], [], []
                 for b in range(B):
+                    # extract features and queries for each clip
                     enc_out = model.pixel_encoder(images[b])
                     fpn_levels, queries_T = enc_out[:-1], enc_out[-1]
                     for t in range(T):
                         if masks[b, t].bool().sum() == 0:
                             continue
                         frame_fpn = tuple(lvl[t:t + 1] for lvl in fpn_levels)
+                        # get depth prediction for each frame
                         pred, _, _ = model(
                             images[b, t:t + 1],
                             instance_queries=queries_T[t],
@@ -67,6 +79,7 @@ def run_eval(cfg: dict, checkpoint_path: str, output_dir: str) -> dict:
                         torch.cat(vm, dim=0).permute(0, 2, 3, 1),
                     )
             else:
+                # non-sequential data
                 data = batch["image"].to(device) if "image" in batch \
                     else batch["images"].to(device).view(-1, *batch["images"].shape[2:])
                 gt = batch["gt"].to(device) if "gt" in batch \

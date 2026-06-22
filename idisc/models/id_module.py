@@ -299,9 +299,11 @@ class AFP(nn.Module):
 
 
 class ContextAdapter(nn.Module):
-    """IDR source for sam_mode="adapter": per ISD resolution the SAM3 tokens
-    self-attend, cross-attend over that level's feature map, then run an MLP,
-    for `depth` iterations. Output is `(B, K, dim)` per resolution."""
+    """
+        IDR source for sam_mode="adapter". For each ISD resolution, for `depth` iterations,
+        SAM3 tokens self-attend, cross-attend over that level's feature map, then run an MLP. 
+        Output is `(B, K, dim)` per resolution.
+    """
 
     def __init__(
         self,
@@ -402,10 +404,12 @@ class ContextAdapter(nn.Module):
 
 
 class MemoryFPN(nn.Module):
-    """Learned SimpleFPN turning SAM3's single fusion `memory` level into an
-    n-level pyramid with ConvTranspose (up) / conv (same) / strided conv (down).
-    Level i has scale `top_scale / 2**i`: 72x72 input, top_scale=2 -> [144^2,72^2,36^2];
-    top_scale=4 -> [288^2,144^2,72^2] (matches backbone_fpn resolution)."""
+    """
+        Learned SimpleFPN turning SAM3's single fusion `memory` level into an 
+        n-level pyramid with ConvTranspose (up) / conv (same) / strided conv (down).
+        Level `i` has scale `top_scale / 2**i`: 72x72 input, top_scale=2 -> [144^2,72^2,36^2];
+        top_scale=4 -> [288^2,144^2,72^2] (matches backbone_fpn resolution).
+    """
 
     def __init__(self, dim: int = 256, n_levels: int = 3, num_groups: int = 8,
                  top_scale: int = 2):

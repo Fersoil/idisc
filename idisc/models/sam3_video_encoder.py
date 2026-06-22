@@ -36,7 +36,14 @@ class Sam3VideoPixelEncoder(nn.Module):
     ):
         super().__init__()
         from sam3.model_builder import build_sam3_video_model
+        """
+            Pixel encoder module for sequential data when SAM3 is combined with iDisc.
 
+            Args:
+                prompt_classes: used for SAM3 video prompt
+                confidence_threshold: used for SAM3 detections
+                max_instances: max number of detected objects
+        """
         self.img_size = coerce_img_size(img_size)
         self.prompt_classes = coerce_prompt_classes(prompt_classes)
 
@@ -86,6 +93,7 @@ class Sam3VideoPixelEncoder(nn.Module):
                 lambda hs: setattr(self, "_last_hs", hs),
             )
 
+    # forward call, returns both per-frame features and detector queries
     def forward(self, clip: torch.Tensor):
         if self._freeze_sam3:
             self.video_model.eval()
@@ -103,6 +111,8 @@ class Sam3VideoPixelEncoder(nn.Module):
 
         per_frame_queries: List[Optional[torch.Tensor]] = [None] * T
         self._last_hs = None
+
+        # used in visualizations
         self._masklets_per_frame = [None] * T if self.track_masklets else []
 
         grad_ctx = (

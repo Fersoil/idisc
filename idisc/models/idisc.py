@@ -114,7 +114,7 @@ class IDisc(nn.Module):
         """
         Args:
             instance_queries: SAM3 query embeddings (K, 256) for sam_mode in
-                {linear_proj, adapter}. If None, IDRs come from AFP.
+                {linear_proj, adapter, mask_pool, mask_adapter, mask_linear}. If None, IDRs come from AFP.
             sam_mode: None | "linear_proj" | "adapter" | "mask_pool"
                 | "mask_adapter" | "mask_linear".
             pre_extracted_encoder_outputs: If provided, skip the pixel_encoder
@@ -141,7 +141,7 @@ class IDisc(nn.Module):
         if self.pixel_decoder is not None:
             fpn_outputs, decoder_outputs = self.pixel_decoder(encoder_outputs)
         else:
-            # pixel_source in {sam3_memory, backbone_fpn}: encoder features feed
+            # pixel_source in {sam3_memory, backbone_fpn}, so encoder features feed
             # ISD directly (no iDisc pixel decoder).
             fpn_outputs = decoder_outputs = tuple(encoder_outputs)
         decoder_outputs = self.filter_decoder_relevant_resolutions(decoder_outputs)

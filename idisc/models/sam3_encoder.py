@@ -57,7 +57,15 @@ class Sam3PixelEncoder(nn.Module):
     ):
         super().__init__()
         from sam3.model_builder import build_sam3_image_model
+        """
+            Pixel encoder module for non-sequential data when SAM3 is combined with iDisc.
 
+            Args:
+                prompt_mode: singleclass / multiclass
+                prompt_classes: used for SAM3 text backbone
+                confidence_threshold: used for SAM3 detections
+                pixel_source: msda / sam3_memory 
+        """
         self.img_size = coerce_img_size(img_size)
         self.prompt_mode = prompt_mode
         self.prompt_classes = coerce_prompt_classes(prompt_classes)
@@ -138,6 +146,8 @@ class Sam3PixelEncoder(nn.Module):
         raise ValueError(f"unknown sam3_trainable part {part!r}; "
                          "expected one of neck/encoder/decoder/head")
 
+    # runs SAM3Processor and installs a decoder hook (for detector hidden states) 
+    # and an encoder hook (if features come from SAM3 memory)
     def _ensure_processor(self, device: torch.device):
         if self._proc is not None and self._proc_device == device:
             return
@@ -219,6 +229,8 @@ class Sam3PixelEncoder(nn.Module):
                 geometric_prompt=self.sam_model._get_dummy_prompt(),
                 find_target=None,
             )
+
+        # extract masks/queries 
         if self._mask_pool:
             instance = out["pred_masks"][0].float()
             if instance.dim() == 4:
@@ -263,6 +275,7 @@ class Sam3PixelEncoder(nn.Module):
                     prompt=" . ".join(self.prompt_classes), state=state,
                 )
                 assert self._last_hs is not None, "decoder hook did not fire"
+                # extract detector queries via hook
                 queries = self._last_hs.float()
 
         n_levels = len(self.embed_dims)
@@ -279,6 +292,7 @@ class Sam3PixelEncoder(nn.Module):
         )
         return [t.float() for t in list(fpn_raw)[:n_levels]], queries
 
+    # forward pass, returns both extracted features and queries/masks
     def forward(self, image: torch.Tensor):
         if self._freeze_sam3:
             self.sam_model.eval()

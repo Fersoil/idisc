@@ -23,7 +23,11 @@ export PYTHONPATH="$PWD:$PYTHONPATH"
 
 ## 2. Deformable-attention op
 
+Build with **CUDA 12.8**. 
+
 ```bash
+module add cuda/12.8                                  
+export CUDA_HOME=$(dirname "$(dirname "$(which nvcc)")")
 cd idisc/models/ops/ && bash ./make.sh && cd -
 ```
 

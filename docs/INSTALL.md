@@ -13,7 +13,11 @@ the SAM3 experiments additionally need the SAM3 checkpoint (step 4).
 ```bash
 python -m venv .venv && source .venv/bin/activate
 # PyTorch + torchvision first, matching your CUDA (we used CUDA 12.8):
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip install torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128 # this should match module version
+# since we used NVIDIA GeForce RTX 5060 Ti with blackwell arch, as of June 2026 we needed to use a nightly build
+# if this installation fails, we recommend you installing from a stable release
+# alternatively you can also try installing with
+# pip install -r requirements-lock.txt
 
 git clone https://github.com/facebookresearch/sam3.git
 pip install -e ./sam3
